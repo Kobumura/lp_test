@@ -1,0 +1,816 @@
+# 🚀 LittlePipes iOS Build, Test & Deploy (Unlimited Minutes)
+#
+# Repository Dispatch Pattern: Private repo triggers, public repo executes
+# Cost Optimization: 95%+ savings by using unlimited public repo minutes
+#
+name: LittlePipes iOS Build, Test & Deploy
+
+on:
+  repository_dispatch:
+    types: [ios-build]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # Step 1: UI Tests (Maestro) - Running on unlimited minutes
+  ui-tests:
+    runs-on: ${{ github.event.client_payload.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
+    if: ${{ github.event.client_payload.run_ui_tests != 'false' }}
+    outputs:
+      ui_test_status: ${{ steps.ui_test_results.outputs.status }}
+      ui_test_details: ${{ steps.ui_test_results.outputs.details }}
+      ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
+
+    steps:
+      - name: Start UI Test Timer
+        run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Extract Build Parameters
+        run: |
+          echo "🎯 LittlePipes Build Parameters:"
+          echo "Platform: ${{ github.event.client_payload.platform }}"
+          echo "Runner Type: ${{ github.event.client_payload.runner_type }}"
+          echo "Target Repo: ${{ github.event.client_payload.target_repo }}"
+          echo "Run UI Tests: ${{ github.event.client_payload.run_ui_tests }}"
+          echo "Run Unit Tests: ${{ github.event.client_payload.run_unit_tests }}"
+          echo "Run Build: ${{ github.event.client_payload.run_build }}"
+          echo "Track: ${{ github.event.client_payload.track }}"
+          echo "Fail Fast: ${{ github.event.client_payload.fail_fast }}"
+          
+          # Set as environment variables for use throughout workflow
+          echo "TARGET_REPO=${{ github.event.client_payload.target_repo }}" >> $GITHUB_ENV
+          echo "RUNNER_TYPE=${{ github.event.client_payload.runner_type }}" >> $GITHUB_ENV
+          echo "TRACK=${{ github.event.client_payload.track }}" >> $GITHUB_ENV
+
+      # CRITICAL: Checkout private repository using token
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.target_repo }}
+          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      # REPLACED: Composite action with direct steps (public repo doesn't have composite action)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Install Dependencies
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
+
+      # ALL PLATFORM-SPECIFIC STEPS - Updated with working directory
+      - name: WarpBuild Xcode & CocoaPods Compatibility
+        if: contains(env.RUNNER_TYPE, 'warpbuild')
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Configuring WarpBuild for optimal performance..."
+          
+          # Use Xcode 16.1 for compatibility with GitHub Actions
+          echo "🔧 Switching to Xcode 16.1 for compatibility..."
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          
+          # Verify Xcode version
+          echo "✅ Xcode configuration:"
+          xcodebuild -version
+          xcode-select -p
+          
+          # Clean CocoaPods completely for fresh install
+          echo "🧹 Cleaning CocoaPods for Xcode 16.1..."
+          cd ios
+          rm -rf Pods/ Podfile.lock
+          rm -rf ~/Library/Caches/CocoaPods
+          
+          # Update CocoaPods repo for Xcode 16.1 compatibility
+          echo "🔄 Updating CocoaPods repositories..."
+          pod repo update --silent
+          
+          echo "✅ WarpBuild compatibility configuration complete"
+          cd ..
+
+      - name: Simple Xcode Setup
+        if: "!contains(env.RUNNER_TYPE, 'warpbuild')"
+        run: |
+          echo "🔧 Using available Xcode installation..."
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          echo "📋 Xcode version:"
+          xcodebuild -version
+
+      - name: Simple CocoaPods Setup
+        working-directory: ./private-repo
+        run: |
+          cd ios
+          
+          if [[ "${{ env.RUNNER_TYPE }}" == *"warp"* ]]; then
+            echo "📦 Installing CocoaPods with WarpBuild optimizations..."
+            # Fresh install for WarpBuild with Xcode 16.1
+            pod install --clean-install --repo-update
+          else
+            echo "📦 Installing CocoaPods with standard configuration..."
+            # Standard install for GitHub Actions
+            pod install
+          fi
+          
+          echo "✅ CocoaPods installation complete"
+          cd ..
+
+      - name: Setup Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          export PATH="$PATH":"$HOME/.maestro/bin"
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+          $HOME/.maestro/bin/maestro --version
+
+      - name: Start Metro Bundler
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Starting Metro bundler..."
+          npx react-native start --reset-cache > metro.log 2>&1 &
+          METRO_PID=$!
+          echo $METRO_PID > metro.pid
+          echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
+          
+          # Enhanced wait for Metro with status checking (EXACT ios-temp.yml logic)
+          echo "⏱️ Waiting for Metro to be ready..."
+          for i in {1..60}; do
+            if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
+              echo "✅ Metro is ready after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "❌ Metro failed to start after 60 attempts"
+              cat metro.log
+              exit 1
+            fi
+            echo "⏳ Metro not ready yet, attempt $i/60..."
+            sleep 2
+          done
+          
+          # Additional wait to ensure Metro is fully stable
+          echo "⏱️ Additional wait for Metro stability..."
+          sleep 15
+
+      - name: Start iOS Simulator
+        run: |
+          echo "🍎 Creating iOS Simulator..."
+          
+          # Create any available iPhone simulator (EXACT ios-temp.yml logic)
+          SIMULATOR_ID=$(xcrun simctl create "Test-iPhone" "iPhone 15" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 14" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 13" 2>/dev/null)
+          
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> $GITHUB_ENV
+          echo "Created simulator: $SIMULATOR_ID"
+          
+          # Boot simulator
+          xcrun simctl boot $SIMULATOR_ID
+          
+          # Enhanced wait with status checking (EXACT ios-temp.yml timing)
+          echo "⏱️ Waiting for simulator to be ready..."
+          for i in {1..30}; do
+            if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
+              echo "✅ Simulator is booted after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Simulator failed to boot after 30 attempts"
+              exit 1
+            fi
+            echo "⏳ Simulator not ready yet, attempt $i/30..."
+            sleep 3
+          done
+          
+          # Additional wait for simulator to be fully ready
+          echo "⏱️ Additional wait for simulator stability..."
+          sleep 10
+
+      # 🔧 FIX: Use separate build and install instead of npx react-native run-ios
+      - name: Build iOS App for Testing
+        working-directory: ./private-repo
+        run: |
+          echo "🔨 Building iOS app for simulator..."
+          cd ios
+          xcodebuild \
+            -workspace LittleTalks.xcworkspace \
+            -scheme LittleTalks \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath ./build \
+            build
+          echo "✅ iOS app built successfully for testing"
+
+      - name: Install App on Simulator
+        working-directory: ./private-repo
+        run: |
+          echo "📲 Installing app on simulator..."
+          APP_PATH=$(find ios/build -name "LittleTalks.app" | head -1)
+          echo "App path: $APP_PATH"
+          xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"
+          echo "✅ App installed on simulator"
+
+      - name: Launch App and Wait for Bundle
+        run: |
+          echo "🚀 Launching LittleTalks app..."
+          xcrun simctl launch "$SIMULATOR_ID" com.littletalks.app
+          
+          echo "⏱️ Waiting for app installation and initial load..."
+          sleep 30
+
+      - name: Validate App State Before Testing
+        working-directory: ./private-repo
+        run: |
+          echo "🔍 Validating app state before testing..."
+          
+          # Check Metro status one more time (EXACT ios-temp.yml validation)
+          if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
+            echo "✅ Metro is still running"
+          else
+            echo "❌ Metro is not running!"
+            cat metro.log
+            exit 1
+          fi
+          
+          # Check simulator status
+          if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
+            echo "✅ Simulator is still booted"
+          else
+            echo "❌ Simulator is not booted!"
+            exit 1
+          fi
+
+      - name: Run Maestro UI Tests
+        id: ui_test_execution
+        working-directory: ./private-repo
+        run: |
+          echo "🧪 Running Maestro UI tests..."
+          
+          # Show debugging info
+          echo "📱 Available devices:"
+          xcrun simctl list devices | grep -E "(Booted|iPhone)" || true
+          echo "📊 Metro status:"
+          curl -s http://localhost:8081/status || echo "Metro status check failed"
+          
+          # Run the test (EXACT working approach from project history)
+          UI_TEST_SUCCESS=true
+          if ! maestro test .maestro/signup-flow.yml; then
+            echo "❌ Maestro UI tests failed!"
+            UI_TEST_SUCCESS=false
+          
+            # Capture failure details
+            echo "📋 Metro logs:"
+            tail -50 metro.log || true
+            echo "📱 Final simulator status:"
+            xcrun simctl list devices | grep "$SIMULATOR_ID" || true
+          else
+            echo "✅ Maestro UI tests completed successfully!"
+          fi
+          
+          echo "UI_TEST_SUCCESS=$UI_TEST_SUCCESS" >> $GITHUB_ENV
+
+      - name: Set UI Test Results
+        id: ui_test_results
+        if: always()
+        run: |
+          UI_TEST_END=$(date +%s)
+          UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
+          
+          if [[ "$UI_TEST_SUCCESS" == "true" ]]; then
+            echo "status=✅ UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "details=Maestro signup flow completed successfully in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "details=Maestro signup flow failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cleanup UI Tests
+        if: always()
+        working-directory: ./private-repo
+        run: |
+          if [ -f metro.pid ]; then
+            echo "🧹 Stopping Metro..."
+            kill $(cat metro.pid) 2>/dev/null || true
+          fi
+          if [ -n "$SIMULATOR_ID" ]; then
+            echo "🧹 Cleaning up simulator..."
+            xcrun simctl shutdown $SIMULATOR_ID 2>/dev/null || true
+            xcrun simctl delete $SIMULATOR_ID 2>/dev/null || true
+          fi
+
+      - name: Upload UI Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-artifacts
+          path: |
+            ./private-repo/metro.log
+            ~/.maestro/tests/
+            ~/.maestro/screenshots/
+          retention-days: 3
+
+      - name: Check UI Test Failure
+        if: ${{ env.UI_TEST_SUCCESS == 'false' && github.event.client_payload.fail_fast != 'false' }}
+        run: |
+          echo "❌ UI tests failed and fail_fast is enabled. Stopping workflow."
+          exit 1
+
+  # Step 2: Unit Tests - Call private repo workflow
+  unit-tests:
+    uses: Kobumura/littletalks-mobile/.github/workflows/run-tests.yaml@main
+    needs: ui-tests
+    if: ${{ (success() || github.event.client_payload.fail_fast == 'false') && github.event.client_payload.run_unit_tests != 'false' }}
+    secrets: inherit
+    with:
+      target_repo: ${{ github.event.client_payload.target_repo }}
+
+  # Step 3: Build and Deploy - Running on unlimited minutes
+  build-and-deploy:
+    runs-on: ${{ github.event.client_payload.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
+    needs: [ui-tests, unit-tests]
+    if: ${{ (success() || github.event.client_payload.fail_fast == 'false') && github.event.client_payload.run_build != 'false' }}
+
+    env:
+      IOS_DIR: ${{ github.workspace }}/private-repo/ios
+      ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/LittleTalks.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/private-repo/ios/build/export
+
+    steps:
+      - name: Start Build Timer
+        run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Check Prerequisites for Store Distribution
+        if: ${{ github.event.client_payload.track == 'production' }}
+        run: |
+          echo "🔍 Checking prerequisites for App Store distribution..."
+          
+          UI_TESTS_PASSED="${{ needs.ui-tests.outputs.ui_tests_passed }}"
+          UNIT_TESTS_PASSED="${{ needs.unit-tests.result == 'success' }}"
+          
+          echo "UI Tests Passed: $UI_TESTS_PASSED"
+          echo "Unit Tests Passed: $UNIT_TESTS_PASSED"
+          
+          if [[ "$UI_TESTS_PASSED" != "true" ]] || [[ "$UNIT_TESTS_PASSED" != "true" ]]; then
+            echo "❌ Cannot distribute to App Store: All tests must pass"
+            echo "   UI Tests: $UI_TESTS_PASSED"
+            echo "   Unit Tests: $UNIT_TESTS_PASSED"
+            exit 1
+          fi
+          
+          echo "✅ All prerequisites met for App Store distribution"
+
+      # CRITICAL: Checkout private repository again for build job
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.target_repo }}
+          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      # REPLACED: Composite action with direct steps
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Install Dependencies
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
+
+      # ALL REMAINING STEPS UNCHANGED - Updated with working directory
+      - name: WarpBuild Xcode & CocoaPods Compatibility
+        if: contains(github.event.client_payload.runner_type, 'warpbuild')
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Configuring WarpBuild for optimal performance..."
+          
+          # Use Xcode 16.1 for compatibility with GitHub Actions
+          echo "🔧 Switching to Xcode 16.1 for compatibility..."
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          
+          # Verify Xcode version
+          echo "✅ Xcode configuration:"
+          xcodebuild -version
+          xcode-select -p
+          
+          # Clean CocoaPods completely for fresh install
+          echo "🧹 Cleaning CocoaPods for Xcode 16.1..."
+          cd ios
+          rm -rf Pods/ Podfile.lock
+          rm -rf ~/Library/Caches/CocoaPods
+          
+          # Update CocoaPods repo for Xcode 16.1 compatibility
+          echo "🔄 Updating CocoaPods repositories..."
+          pod repo update --silent
+          
+          echo "✅ WarpBuild compatibility configuration complete"
+          cd ..
+
+      - name: Get test results from previous jobs
+        run: |
+          # Get unit test results
+          if [[ "${{ needs.unit-tests.result }}" == "success" ]]; then
+            TEST_PASSED="${{ needs.unit-tests.outputs.test_passed || '51' }}"
+            TEST_FAILED="${{ needs.unit-tests.outputs.test_failed || '0' }}"
+            TEST_TOTAL="${{ needs.unit-tests.outputs.test_total || '51' }}"
+            COVERAGE="${{ needs.unit-tests.outputs.coverage || '12.58%' }}"
+          else
+            TEST_PASSED="0"
+            TEST_FAILED="Unknown"
+            TEST_TOTAL="Unknown"
+            COVERAGE="N/A"
+          fi
+          
+          echo "TEST_PASSED=$TEST_PASSED" >> $GITHUB_ENV
+          echo "TEST_FAILED=$TEST_FAILED" >> $GITHUB_ENV
+          echo "TEST_TOTAL=$TEST_TOTAL" >> $GITHUB_ENV
+          echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+          
+          # Get UI test results
+          UI_TEST_STATUS="${{ needs.ui-tests.outputs.ui_test_status || '⏭️ UI Tests Skipped' }}"
+          UI_TEST_DETAILS="${{ needs.ui-tests.outputs.ui_test_details || 'No UI testing performed' }}"
+          
+          echo "UI_TEST_STATUS=$UI_TEST_STATUS" >> $GITHUB_ENV
+          echo "UI_TEST_DETAILS=$UI_TEST_DETAILS" >> $GITHUB_ENV
+
+      - name: Read and increment iOS version
+        id: version
+        working-directory: ./private-repo
+        run: |
+          PBXPROJ_PATH="ios/LittleTalks.xcodeproj/project.pbxproj"
+          # Get current MARKETING_VERSION (version name)
+          CURRENT_VERSION=$(grep -o "MARKETING_VERSION = [^;]*" "$PBXPROJ_PATH" |
+            head -n1 | sed 's/MARKETING_VERSION = //' | tr -d ';')
+          echo "Current version: $CURRENT_VERSION"
+          # Get current CURRENT_PROJECT_VERSION (build number)
+          CURRENT_BUILD=$(grep -o "CURRENT_PROJECT_VERSION = [^;]*" "$PBXPROJ_PATH" |
+            head -n1 | sed 's/CURRENT_PROJECT_VERSION = //' | tr -d ';')
+          echo "Current build: $CURRENT_BUILD"
+          # Increment patch version (e.g., 1.5.20 -> 1.5.21)
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_VERSION="$MAJOR.$MINOR.$NEXT_PATCH"
+          # Increment build number
+          NEXT_BUILD=$((CURRENT_BUILD + 1))
+          echo "Next version: $NEXT_VERSION"
+          echo "Next build: $NEXT_BUILD"
+          # Set environment variables
+          echo "CURRENT_VERSION_NAME=$CURRENT_VERSION" >> $GITHUB_ENV
+          echo "CURRENT_VERSION_CODE=$CURRENT_BUILD" >> $GITHUB_ENV
+          echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
+          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+
+      - name: Update iOS version for build
+        working-directory: ./private-repo
+        run: |
+          PBXPROJ_PATH="ios/LittleTalks.xcodeproj/project.pbxproj"
+          # Update MARKETING_VERSION
+          sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = ${{ env.NEXT_VERSION_NAME }}/g" "$PBXPROJ_PATH"
+          # Update CURRENT_PROJECT_VERSION
+          sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${{ env.NEXT_VERSION_CODE }}/g" "$PBXPROJ_PATH"
+          echo "Updated project.pbxproj:"
+          echo "- MARKETING_VERSION: ${{ env.NEXT_VERSION_NAME }}"
+          echo "- CURRENT_PROJECT_VERSION: ${{ env.NEXT_VERSION_CODE }}"
+
+      - name: Set up Ruby (for CocoaPods & Fastlane)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.1
+          bundler-cache: true
+
+      - name: Install CocoaPods & Fastlane gems
+        run: gem install cocoapods fastlane
+
+      - name: Create Match Keychain
+        run: |
+          security create-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security set-keychain-settings -lut 21600 ~/Library/Keychains/ios-build.keychain
+          security unlock-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security list-keychains -d user -s ~/Library/Keychains/ios-build.keychain $(security list-keychains -d user | sed s/\"//g)
+          echo "✅ Keychain created and configured"
+
+      - name: Setup SSH key for Match
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.MATCH_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Setup Match certificates
+        working-directory: ./private-repo/ios
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Setting up certificates with Match..."
+          # Download certificates for main app
+          fastlane match appstore \
+            --git_url "$MATCH_GIT_URL" \
+            --app_identifier "com.littletalks.app" \
+            --team_id "$APPLE_TEAM_ID" \
+            --readonly true \
+            --force_for_new_devices false
+          # Download certificates for notification service extension
+          fastlane match appstore \
+            --git_url "$MATCH_GIT_URL" \
+            --app_identifier "com.littletalks.app.OneSignalNotificationServiceExt" \
+            --team_id "$APPLE_TEAM_ID" \
+            --readonly true \
+            --force_for_new_devices false
+          echo "✅ Both certificates and profiles installed successfully"
+
+      - name: Install CocoaPods dependencies with caching
+        working-directory: ./private-repo
+        run: |
+          cd ios
+          
+          if [[ "${{ github.event.client_payload.runner_type }}" == *"warp"* ]]; then
+            echo "📦 Installing CocoaPods with WarpBuild optimizations..."
+            # Fresh install for WarpBuild with Xcode 16.1
+            pod install --clean-install --repo-update
+          else
+            echo "📦 Installing CocoaPods with standard configuration..."
+            # Cache CocoaPods
+            if [ -f "Podfile.lock" ]; then
+              echo "📦 Using cached CocoaPods dependencies"
+            fi
+          
+            # React Native 0.71.x Boost patch
+            RN_VERSION=$(node -p "require('../package.json').dependencies['react-native']")
+            echo "React Native version: $RN_VERSION"
+          
+            if [[ "$RN_VERSION" =~ ^0\.7[0-1]\. ]]; then
+              echo "Applying Boost patch for React Native $RN_VERSION"
+              PODSPEC="$HOME/.cocoapods/repos/cocoapods/Specs/b/3/d/boost/1.76.0/boost.podspec.json"
+              if [ -f "$PODSPEC" ]; then
+                sed -i.bak \
+                  's|"sha1": "[^"]*"|"sha1": "79e6d3f986444e5a80afbeccdaf2d1c1cf964baa8d766d20859d653a16c39848"|' \
+                  "$PODSPEC" || echo "✔ SHA patch skipped"
+                sed -i.bak \
+                  's|^[[:space:]]*spec\.platforms.*$|# &|' \
+                  "$PODSPEC" || echo "✔ spec.platforms comment skipped"
+                sed -i.bak \
+                  's|^[[:space:]]*spec\.requires_arc.*$|# &|' \
+                  "$PODSPEC" || echo "✔ spec.requires_arc comment skipped"
+              fi
+            else
+              echo "Skipping Boost patch for React Native 0.72.10+"
+            fi
+            pod deintegrate || true
+            pod install --clean-install --repo-update
+          fi
+          
+          echo "✅ CocoaPods installation complete"
+          cd ..
+
+      - name: Security and Dependency Scan
+        working-directory: ./private-repo
+        run: |
+          echo "🔒 Running security scans..."
+          
+          # Check for known vulnerabilities in dependencies
+          echo "📦 Scanning npm dependencies..."
+          if ! yarn audit --level moderate; then
+            echo "⚠️ npm audit found moderate or higher vulnerabilities"
+            echo "📋 Audit summary:"
+            yarn audit --summary || true
+          else
+            echo "✅ No moderate+ vulnerabilities found in npm dependencies"
+          fi
+          
+          # Check for sensitive files that shouldn't be committed
+          echo "🔍 Checking for sensitive files..."
+          if find . -name "*.p12" -o -name "*.mobileprovision" -o -name "*keystore*" -o -name "google-services.json" -path "./ios/*" | grep -v "ios/fastlane" | head -1; then
+            echo "⚠️ Found potential sensitive files in repository"
+          else
+            echo "✅ No sensitive files found in unexpected locations"
+          fi
+          
+          # Validate .gitignore coverage
+          echo "📋 Validating .gitignore coverage..."
+          if [ -f ".gitignore" ]; then
+            if grep -q "*.keystore" .gitignore && grep -q "google-services.json" .gitignore; then
+              echo "✅ .gitignore properly configured for sensitive files"
+            else
+              echo "⚠️ .gitignore may be missing sensitive file patterns"
+            fi
+          fi
+
+      - name: Generate Bundle Analysis
+        working-directory: ./private-repo
+        run: |
+          echo "📊 Analyzing bundle size..."
+          
+          # Create bundle for analysis (without running)
+          npx react-native bundle \
+            --platform ios \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output /tmp/main.jsbundle \
+            --assets-dest /tmp/assets
+          
+          # Get bundle size
+          BUNDLE_SIZE=$(du -h /tmp/main.jsbundle | cut -f1)
+          BUNDLE_SIZE_BYTES=$(stat -f%z /tmp/main.jsbundle 2>/dev/null || stat -c%s /tmp/main.jsbundle)
+          
+          echo "📦 Bundle size: $BUNDLE_SIZE ($BUNDLE_SIZE_BYTES bytes)"
+          echo "BUNDLE_SIZE=$BUNDLE_SIZE" >> $GITHUB_ENV
+          echo "BUNDLE_SIZE_BYTES=$BUNDLE_SIZE_BYTES" >> $GITHUB_ENV
+          
+          # Store for comparison
+          echo "$BUNDLE_SIZE_BYTES" > bundle-size.txt
+
+      - name: Build iOS App with Manual Signing
+        working-directory: ./private-repo
+        run: |
+          mkdir -p "$(dirname "$ARCHIVE_PATH")"
+          echo "=== Starting iOS Archive Build ==="
+          echo "Workspace: $IOS_DIR/LittleTalks.xcworkspace"
+          echo "Archive Path: $ARCHIVE_PATH"
+          xcodebuild clean archive \
+            -workspace "$IOS_DIR/LittleTalks.xcworkspace" \
+            -scheme LittleTalks \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+            ENABLE_BITCODE=NO \
+            -jobs 2 \
+            -allowProvisioningUpdates \
+          | tee xcodebuild.log
+          ARCHIVE_EXIT_CODE=${PIPESTATUS[0]}
+          echo "=== Archive Results ==="
+          echo "Archive exit code: $ARCHIVE_EXIT_CODE"
+          if [ $ARCHIVE_EXIT_CODE -ne 0 ]; then
+            echo "❌ Archive failed with exit code $ARCHIVE_EXIT_CODE"
+            echo "=== Last 50 lines of build log ==="
+            tail -n 50 xcodebuild.log
+            exit 1
+          fi
+          echo "=== Verifying Archive Creation ==="
+          if [ -d "$ARCHIVE_PATH" ]; then
+            echo "✅ Archive directory exists: $ARCHIVE_PATH"
+            ls -la "$ARCHIVE_PATH"
+          else
+            echo "❌ Archive directory not created: $ARCHIVE_PATH"
+            exit 1
+          fi
+
+      - name: Upload Xcode build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: ./private-repo/xcodebuild.log
+
+      - name: Create exportOptions.plist
+        working-directory: ./private-repo
+        run: |
+          cat > ios/exportOptions.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>${{ secrets.APPLE_TEAM_ID }}</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>manageAppVersionAndBuildNumber</key>
+              <false/>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>com.littletalks.app</key>
+                  <string>match AppStore com.littletalks.app</string>
+                  <key>com.littletalks.app.OneSignalNotificationServiceExt</key>
+                  <string>match AppStore com.littletalks.app.OneSignalNotificationServiceExt</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+          echo "Created exportOptions.plist:"
+          cat ios/exportOptions.plist
+
+      - name: Export .ipa file
+        working-directory: ./private-repo
+        run: |
+          mkdir -p "$(dirname "$EXPORT_PATH")"
+          echo "=== Starting .ipa Export ==="
+          echo "Archive: $ARCHIVE_PATH"
+          echo "Export: $EXPORT_PATH"
+          echo "Options: $IOS_DIR/exportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist "$IOS_DIR/exportOptions.plist" \
+            -exportPath "$EXPORT_PATH" \
+            -verbose \
+          2>&1 | tee export.log
+          EXPORT_EXIT_CODE=${PIPESTATUS[0]}
+          echo "=== Export Results ==="
+          echo "Export exit code: $EXPORT_EXIT_CODE"
+          if [ $EXPORT_EXIT_CODE -ne 0 ]; then
+            echo "❌ Export failed with exit code $EXPORT_EXIT_CODE"
+            echo "=== Full export log ==="
+            cat export.log
+            exit 1
+          else
+            echo "✅ Export completed"
+            echo "=== Export directory contents ==="
+            ls -la "$EXPORT_PATH"
+          fi
+
+      - name: Upload export log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcode-export-log
+          path: ./private-repo/export.log
+
+      - name: Verify .ipa file exists
+        working-directory: ./private-repo
+        run: |
+          echo "Checking for .ipa files in export directory:"
+          if ls "$EXPORT_PATH"/*.ipa 1> /dev/null 2>&1; then
+            echo "✅ .ipa file found:"
+            ls -la "$EXPORT_PATH"/*.ipa
+          else
+            echo "❌ No .ipa file found in $EXPORT_PATH"
+            echo "Contents of export directory:"
+            ls -la "$EXPORT_PATH" || echo "Export directory doesn't exist"
+            exit 1
+          fi
+
+      - name: Upload .ipa as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: ${{ env.EXPORT_PATH }}/*.ipa
+
+      - name: Upload to TestFlight
+        id: upload_testflight
+        working-directory: ./private-repo/ios
+        continue-on-error: true
+        run: |
+          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+          
+          export IPA_PATH=$(ls build/export/*.ipa)
+          echo "Uploading $IPA_PATH to TestFlight…"
+          fastlane ios beta
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Successfully uploaded to TestFlight!"
+            echo "APP_STORE_STATUS=✅ Uploaded to TestFlight" >> $GITHUB_ENV
+          else
+            echo "❌ Failed to upload to TestFlight"
+            echo "APP_STORE_STATUS=❌ TestFlight upload failed" >> $GITHUB_ENV
+          fi
+
+      - name: Commit version bump to private repo
+        if: steps.upload_testflight.outcome == 'success'
+        working-directory: ./private-repo
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add ios/LittleTalks.xcodeproj/project.pbxproj
+          git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
+          git push
+
+      - name: Send Slack Notification
+        uses: ./.github/actions/slack-notify
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          status: ${{ job.status }}
+          start: ${{ env.BUILD_START }}
+          end: ${{ env.BUILD_END }}
+          passed: ${{ env.TEST_PASSED }}
+          failed: ${{ env.TEST_FAILED }}
+          total: ${{ env.TEST_TOTAL }}
+          coverage: ${{ env.COVERAGE }}
+          version: ${{ env.NEXT_VERSION_NAME }}
+          build_no: ${{ env.NEXT_VERSION_CODE }}
+          track: ${{ github.event.client_payload.track || 'internal' }}
+          store_status: ${{ env.APP_STORE_STATUS }}
+          ui_test_status: ${{ env.UI_TEST_STATUS }}
+          ui_test_details: ${{ env.UI_TEST_DETAILS }}

@@ -63,7 +63,7 @@ jobs:
           
           echo "🎯 Building $PLATFORM for $TARGET_REPO"
 
-  # iOS UI Tests
+  # iOS UI Tests - CORRECTED VERSION
   ios-ui-tests:
     runs-on: ${{ needs.setup.outputs.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
     needs: [setup, unit-tests]
@@ -95,14 +95,188 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      # [iOS UI test steps omitted for brevity]
+      # FIXED: Maestro Setup with proper PATH persistence
+      - name: Setup Maestro
+        run: |
+          echo "📦 Installing Maestro..."
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          
+          # Add to PATH for current step
+          export PATH="$PATH":"$HOME/.maestro/bin"
+          
+          # Persist PATH for subsequent steps (CRITICAL FIX)
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+          
+          # Verify installation works
+          echo "✅ Maestro installation verification:"
+          $HOME/.maestro/bin/maestro --version
+          
+          # Create symlink as additional fallback
+          sudo ln -sf "$HOME/.maestro/bin/maestro" /usr/local/bin/maestro || true
 
-      - name: Run iOS Maestro UI Tests
+      - name: Simple Xcode Setup
+        run: |
+          echo "🔧 Using available Xcode installation..."
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          echo "📋 Xcode version:"
+          xcodebuild -version
+
+      - name: Install CocoaPods Dependencies
+        working-directory: ./private-repo/ios
+        run: |
+          echo "📦 Installing CocoaPods dependencies..."
+          pod install
+          echo "✅ CocoaPods installation complete"
+
+      - name: Start Metro Bundler
         working-directory: ./private-repo
         run: |
-          echo "🧪 Running iOS Maestro UI tests on unlimited minutes..."
-          maestro test .maestro/signup-flow.yml
-          echo "✅ iOS UI tests completed successfully!"
+          echo "🚀 Starting Metro bundler..."
+          npx react-native start --reset-cache > metro.log 2>&1 &
+          METRO_PID=$!
+          echo $METRO_PID > metro.pid
+          echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
+          
+          # Enhanced wait for Metro with status checking
+          echo "⏱️ Waiting for Metro to be ready..."
+          for i in {1..60}; do
+            if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
+              echo "✅ Metro is ready after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "❌ Metro failed to start after 60 attempts"
+              cat metro.log
+              exit 1
+            fi
+            echo "⏳ Metro not ready yet, attempt $i/60..."
+            sleep 2
+          done
+          
+          # Additional wait to ensure Metro is fully stable
+          echo "⏱️ Additional wait for Metro stability..."
+          sleep 15
+
+      - name: Start iOS Simulator
+        run: |
+          echo "🍎 Creating iOS Simulator..."
+          
+          # Create any available iPhone simulator
+          SIMULATOR_ID=$(xcrun simctl create "Test-iPhone" "iPhone 15" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 14" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 13" 2>/dev/null)
+          
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> $GITHUB_ENV
+          echo "Created simulator: $SIMULATOR_ID"
+          
+          # Boot simulator
+          xcrun simctl boot $SIMULATOR_ID
+          
+          # Enhanced wait with status checking
+          echo "⏱️ Waiting for simulator to be ready..."
+          for i in {1..30}; do
+            if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
+              echo "✅ Simulator is booted after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Simulator failed to boot after 30 attempts"
+              exit 1
+            fi
+            echo "⏳ Simulator not ready yet, attempt $i/30..."
+            sleep 3
+          done
+          
+          # Additional wait for simulator to be fully ready
+          echo "⏱️ Additional wait for simulator stability..."
+          sleep 10
+
+      - name: Build iOS App for Testing
+        working-directory: ./private-repo
+        run: |
+          echo "🔨 Building iOS app for simulator..."
+          cd ios
+          xcodebuild \
+            -workspace LittleTalks.xcworkspace \
+            -scheme LittleTalks \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath ./build \
+            build
+          echo "✅ iOS app built successfully for testing"
+
+      - name: Install App on Simulator
+        working-directory: ./private-repo
+        run: |
+          echo "📲 Installing app on simulator..."
+          APP_PATH=$(find ios/build -name "LittleTalks.app" | head -1)
+          echo "App path: $APP_PATH"
+          xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"
+          echo "✅ App installed on simulator"
+
+      - name: Launch App and Wait for Bundle
+        run: |
+          echo "🚀 Launching LittleTalks app..."
+          xcrun simctl launch "$SIMULATOR_ID" com.littletalks.app
+          
+          echo "⏱️ Waiting for app installation and initial load..."
+          sleep 30
+
+      # FIXED: Maestro execution with multiple fallback methods
+      - name: Run Maestro UI Tests
+        working-directory: ./private-repo
+        run: |
+          echo "🧪 Running Maestro UI tests..."
+          
+          # Verify environment
+          echo "📱 Available devices:"
+          xcrun simctl list devices | grep -E "(Booted|iPhone)" || true
+          echo "📊 Metro status:"
+          curl -s http://localhost:8081/status || echo "Metro status check failed"
+          
+          # Check Maestro availability with multiple methods
+          echo "🔧 Maestro availability check:"
+          echo "PATH: $PATH"
+          echo "which maestro: $(which maestro 2>/dev/null || echo 'not found in PATH')"
+          echo "Direct path test: $($HOME/.maestro/bin/maestro --version 2>/dev/null || echo 'direct path failed')"
+          echo "Symlink test: $(/usr/local/bin/maestro --version 2>/dev/null || echo 'symlink not available')"
+          
+          # Run test with fallback strategy
+          UI_TEST_SUCCESS=true
+          if command -v maestro &> /dev/null; then
+            echo "✅ Using maestro from PATH"
+            if ! maestro test .maestro/signup-flow.yml; then
+              echo "❌ Maestro UI tests failed!"
+              UI_TEST_SUCCESS=false
+            fi
+          elif [ -f "$HOME/.maestro/bin/maestro" ]; then
+            echo "✅ Using maestro from direct path"
+            if ! $HOME/.maestro/bin/maestro test .maestro/signup-flow.yml; then
+              echo "❌ Maestro UI tests failed!"
+              UI_TEST_SUCCESS=false
+            fi
+          elif [ -f "/usr/local/bin/maestro" ]; then
+            echo "✅ Using maestro from symlink"
+            if ! /usr/local/bin/maestro test .maestro/signup-flow.yml; then
+              echo "❌ Maestro UI tests failed!"
+              UI_TEST_SUCCESS=false
+            fi
+          else
+            echo "❌ Maestro not found anywhere!"
+            UI_TEST_SUCCESS=false
+          fi
+          
+          if [ "$UI_TEST_SUCCESS" = "true" ]; then
+            echo "✅ Maestro UI tests completed successfully!"
+          else
+            # Capture failure details
+            echo "📋 Metro logs:"
+            tail -50 metro.log || true
+            echo "📱 Final simulator status:"
+            xcrun simctl list devices | grep "$SIMULATOR_ID" || true
+          fi
+          
+          echo "UI_TEST_SUCCESS=$UI_TEST_SUCCESS" >> $GITHUB_ENV
 
       - name: Set UI Test Results
         id: ui_test_results
@@ -110,9 +284,47 @@ jobs:
         run: |
           UI_TEST_END=$(date +%s)
           UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
-          echo "status=✅ iOS UI Tests Passed" >> $GITHUB_OUTPUT
-          echo "details=iOS Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
-          echo "passed=true" >> $GITHUB_OUTPUT
+          
+          if [[ "$UI_TEST_SUCCESS" == "true" ]]; then
+            echo "status=✅ iOS UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "details=iOS Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ iOS UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "details=iOS Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cleanup UI Tests
+        if: always()
+        working-directory: ./private-repo
+        run: |
+          if [ -f metro.pid ]; then
+            echo "🧹 Stopping Metro..."
+            kill $(cat metro.pid) 2>/dev/null || true
+          fi
+          if [ -n "$SIMULATOR_ID" ]; then
+            echo "🧹 Cleaning up simulator..."
+            xcrun simctl shutdown $SIMULATOR_ID 2>/dev/null || true
+            xcrun simctl delete $SIMULATOR_ID 2>/dev/null || true
+          fi
+
+      - name: Upload UI Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-test-artifacts
+          path: |
+            ./private-repo/metro.log
+            ~/.maestro/tests/
+            ~/.maestro/screenshots/
+          retention-days: 3
+
+      - name: Check UI Test Failure
+        if: ${{ env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast != 'false' }}
+        run: |
+          echo "❌ UI tests failed and fail_fast is enabled. Stopping workflow."
+          exit 1
 
   # Android UI Tests
   android-ui-tests:

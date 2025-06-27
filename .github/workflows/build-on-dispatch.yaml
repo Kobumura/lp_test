@@ -284,30 +284,11 @@ jobs:
           npm test -- --coverage --watchAll=false
           echo "✅ Unit tests completed!"
 
-  # iOS Build & Deploy - Full implementation
+# iOS Build & Deploy - Full implementation
   ios-build:
     runs-on: ${{ needs.setup.outputs.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
     needs: [setup, ios-ui-tests, unit-tests]
     if: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
-
-    steps:
-      - name: Checkout Private Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
-          path: ./private-repo
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
-
-      - name: Install Dependencies
-        working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
 
     env:
       IOS_DIR: ${{ github.workspace }}/private-repo/ios
@@ -507,31 +488,12 @@ jobs:
           git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
           git push
 
-  # Android Build & Deploy - Full implementation
+# Android Build & Deploy - Full implementation
   android-build:
     runs-on: buildjet-4vcpu-ubuntu-2204
     timeout-minutes: 30
     needs: [setup, android-ui-tests, unit-tests]
     if: ${{ needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
-
-    steps:
-      - name: Checkout Private Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
-          path: ./private-repo
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
-
-      - name: Install Dependencies
-        working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
 
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
@@ -589,51 +551,37 @@ jobs:
       - name: Bump Version Name and Code
         working-directory: ./private-repo/android/app
         run: |
-          CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
-          CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
-          
-          if [ -z "$CURRENT_VERSION_CODE" ]; then
-            CURRENT_VERSION_CODE="124"
-          fi
-          
-          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
-          MAJOR=${VERSION_PARTS[0]}
-          MINOR=${VERSION_PARTS[1]}
-          PATCH=${VERSION_PARTS[2]}
-          NEXT_PATCH=$((PATCH + 1))
-          NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
-          NEXT_VERSION_CODE=$((CURRENT_VERSION_CODE + 1))
-          
-          echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
-          echo "NEXT_VERSION_CODE=$NEXT_VERSION_CODE" >> $GITHUB_ENV
-          
-          sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
-          sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
-          echo "✅ Version bumped to $NEXT_VERSION_NAME (code: $NEXT_VERSION_CODE)"
+              CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
+              CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
+              
+              if [ -z "$CURRENT_VERSION_CODE" ]; then
+              CURRENT_VERSION_CODE="124"
+              fi
+              
+              IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
+              MAJOR=${VERSION_PARTS[0]}
+              MINOR=${VERSION_PARTS[1]}
+              PATCH=${VERSION_PARTS[2]}
+              NEXT_PATCH=$((PATCH + 1))
+              NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
+              NEXT_VERSION_CODE=$((CURRENT_VERSION_CODE + 1))
+              
+              echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
+              echo "NEXT_VERSION_CODE=$NEXT_VERSION_CODE" >> $GITHUB_ENV
+              
+              sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
+              sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
+              echo "✅ Version bumped to $NEXT_VERSION_NAME (code: $NEXT_VERSION_CODE)"
 
-      - name: Build Release AAB
-        working-directory: ./private-repo/android
-        run: |
-          ./gradlew bundleRelease \
-            -PsigningKeystorePassword="${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}" \
-            -PsigningKeyAlias="${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}" \
-            -PsigningKeyPassword="${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}" \
-            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
-            --stacktrace
-          
-          AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
-          AAB_SIZE=$(du -h "$AAB_PATH" | cut -f1)
-          echo "BUNDLE_SIZE=$AAB_SIZE" >> $GITHUB_ENV
-
-      - name: Upload to Google Play
-        uses: r0adkll/upload-google-play@v1
-        continue-on-error: true
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.littletalks.app
-          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ needs.setup.outputs.track }}
-          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+            - name: Upload to Google Play
+              uses: r0adkll/upload-google-play@v1
+              continue-on-error: true
+              with:
+                serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+                packageName: com.littletalks.app
+                releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+                track: ${{ needs.setup.outputs.track }}
+                status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
       - name: Set Google Play Status
         run: |

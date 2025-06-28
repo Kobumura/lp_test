@@ -10,14 +10,15 @@ on:
         required: true
         default: 'Kobumura/littletalks-mobile'
       platform:
+        description: 'Platform to build'
         type: choice
         options: [ios, android, both]
         default: 'both'
-      runner_type:
+      speed:
+        description: 'Runner speed (github=free, fast=optimized runners)'
         type: choice
-        options: [github, buildjet, warpbuild]
+        options: [github, fast]
         default: 'github'
-        description: 'Runner type (github=default, buildjet=faster Android, warpbuild=faster iOS)'
 
 jobs:
   setup:
@@ -31,48 +32,104 @@ jobs:
       run_build: ${{ steps.config.outputs.run_build }}
       track: ${{ steps.config.outputs.track }}
       fail_fast: ${{ steps.config.outputs.fail_fast }}
-      runner_type: ${{ steps.config.outputs.runner_type }}
+      ios_runner: ${{ steps.config.outputs.ios_runner }}
+      android_runner: ${{ steps.config.outputs.android_runner }}
+      use_buildjet: ${{ steps.config.outputs.use_buildjet }}
+      use_warpbuild: ${{ steps.config.outputs.use_warpbuild }}
     steps:
       - name: Configure Build
         id: config
         run: |
+          echo "🎯 LittlePipes Configuration"
+          
+          # Determine source of inputs
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             TARGET_REPO="${{ github.event.client_payload.target_repo }}"
             PLATFORM="${{ github.event.client_payload.platform || 'both' }}"
+            SPEED="${{ github.event.client_payload.speed || 'github' }}"
             RUN_UI_TESTS="${{ github.event.client_payload.run_ui_tests || 'true' }}"
             RUN_UNIT_TESTS="${{ github.event.client_payload.run_unit_tests || 'true' }}"
             RUN_BUILD="${{ github.event.client_payload.run_build || 'true' }}"
             TRACK="${{ github.event.client_payload.track || 'internal' }}"
             FAIL_FAST="${{ github.event.client_payload.fail_fast || 'true' }}"
-            RUNNER_TYPE="${{ github.event.client_payload.runner_type || 'github' }}"
           else
             TARGET_REPO="${{ inputs.target_repo }}"
-            PLATFORM="${{ inputs.platform || 'both' }}"
+            PLATFORM="${{ inputs.platform }}"
+            SPEED="${{ inputs.speed }}"
             RUN_UI_TESTS="true"
             RUN_UNIT_TESTS="true"
             RUN_BUILD="true"
             TRACK="internal"
             FAIL_FAST="true"
-            RUNNER_TYPE="${{ inputs.runner_type || 'github' }}"
           fi
           
+          echo "📋 Input Configuration:"
+          echo "  Target Repo: $TARGET_REPO"
+          echo "  Platform: $PLATFORM"
+          echo "  Speed: $SPEED"
+          echo "  UI Tests: $RUN_UI_TESTS"
+          echo "  Unit Tests: $RUN_UNIT_TESTS"
+          echo "  Build: $RUN_BUILD"
+          echo "  Track: $TRACK"
+          echo "  Fail Fast: $FAIL_FAST"
+          
+          # Set platform outputs
+          if [[ "$PLATFORM" == "ios" || "$PLATFORM" == "both" ]]; then
+            BUILD_IOS="true"
+          else
+            BUILD_IOS="false"
+          fi
+          
+          if [[ "$PLATFORM" == "android" || "$PLATFORM" == "both" ]]; then
+            BUILD_ANDROID="true"
+          else
+            BUILD_ANDROID="false"
+          fi
+          
+          # Set runner types based on speed preference
+          if [ "$SPEED" = "fast" ]; then
+            IOS_RUNNER="warp-macos-latest-arm64-6x"
+            ANDROID_RUNNER="buildjet-4vcpu-ubuntu-2204"
+            USE_BUILDJET="true"
+            USE_WARPBUILD="true"
+          else
+            IOS_RUNNER="macos-15"
+            ANDROID_RUNNER="ubuntu-latest"
+            USE_BUILDJET="false"
+            USE_WARPBUILD="false"
+          fi
+          
+          echo ""
+          echo "🚀 Computed Configuration:"
+          echo "  Build iOS: $BUILD_IOS"
+          echo "  Build Android: $BUILD_ANDROID"
+          echo "  iOS Runner: $IOS_RUNNER"
+          echo "  Android Runner: $ANDROID_RUNNER"
+          echo "  Use BuildJet: $USE_BUILDJET"
+          echo "  Use WarpBuild: $USE_WARPBUILD"
+          
+          # Set outputs
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
-          echo "build_ios=$([[ $PLATFORM == \"ios\" || $PLATFORM == \"both\" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "build_android=$([[ $PLATFORM == \"android\" || $PLATFORM == \"both\" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "build_ios=$BUILD_IOS" >> $GITHUB_OUTPUT
+          echo "build_android=$BUILD_ANDROID" >> $GITHUB_OUTPUT
           echo "run_ui_tests=$RUN_UI_TESTS" >> $GITHUB_OUTPUT
           echo "run_unit_tests=$RUN_UNIT_TESTS" >> $GITHUB_OUTPUT
           echo "run_build=$RUN_BUILD" >> $GITHUB_OUTPUT
           echo "track=$TRACK" >> $GITHUB_OUTPUT
           echo "fail_fast=$FAIL_FAST" >> $GITHUB_OUTPUT
-          echo "runner_type=$RUNNER_TYPE" >> $GITHUB_OUTPUT
+          echo "ios_runner=$IOS_RUNNER" >> $GITHUB_OUTPUT
+          echo "android_runner=$ANDROID_RUNNER" >> $GITHUB_OUTPUT
+          echo "use_buildjet=$USE_BUILDJET" >> $GITHUB_OUTPUT
+          echo "use_warpbuild=$USE_WARPBUILD" >> $GITHUB_OUTPUT
           
-          echo "🎯 Building $PLATFORM for $TARGET_REPO with $RUNNER_TYPE runners"
+          echo ""
+          echo "✅ Configuration complete!"
 
   # Unit Tests (Fast fail gate)
   unit-tests:
-    runs-on: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.setup.outputs.use_buildjet == 'true' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
     needs: setup
-    if: ${{ needs.setup.outputs.run_unit_tests == 'true' }}
+    if: needs.setup.outputs.run_unit_tests == 'true'
     steps:
       - name: Checkout Private Repository
         uses: actions/checkout@v4
@@ -82,7 +139,7 @@ jobs:
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
@@ -90,7 +147,7 @@ jobs:
           cache-dependency-path: './private-repo/yarn.lock'
 
       - name: Setup Node.js (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -110,9 +167,9 @@ jobs:
 
   # iOS UI Tests
   ios-ui-tests:
-    runs-on: ${{ needs.setup.outputs.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
+    runs-on: ${{ needs.setup.outputs.ios_runner }}
     needs: [setup, unit-tests]
-    if: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_ui_tests == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
+    if: needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_ui_tests == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
     outputs:
       ui_test_status: ${{ steps.ui_test_results.outputs.status }}
       ui_test_details: ${{ steps.ui_test_results.outputs.details }}
@@ -160,7 +217,7 @@ jobs:
           sudo ln -sf "$HOME/.maestro/bin/maestro" /usr/local/bin/maestro || true
 
       - name: WarpBuild Xcode & CocoaPods Compatibility
-        if: contains(needs.setup.outputs.runner_type, 'warpbuild')
+        if: needs.setup.outputs.use_warpbuild == 'true'
         working-directory: ./private-repo
         run: |
           echo "🚀 Configuring WarpBuild for optimal performance..."
@@ -188,7 +245,7 @@ jobs:
           cd ..
 
       - name: Simple Xcode Setup
-        if: "!contains(needs.setup.outputs.runner_type, 'warpbuild')"
+        if: needs.setup.outputs.use_warpbuild == 'false'
         run: |
           echo "🔧 Using available Xcode installation..."
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -198,7 +255,7 @@ jobs:
       - name: Install CocoaPods Dependencies
         working-directory: ./private-repo/ios
         run: |
-          if [[ "${{ needs.setup.outputs.runner_type }}" == *"warp"* ]]; then
+          if [[ "${{ needs.setup.outputs.use_warpbuild }}" == "true" ]]; then
             echo "📦 Installing CocoaPods with WarpBuild optimizations..."
             # Fresh install for WarpBuild with Xcode 16.1
             pod install --clean-install --repo-update
@@ -403,17 +460,17 @@ jobs:
           retention-days: 3
 
       - name: Check UI Test Failure
-        if: ${{ env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast != 'false' }}
+        if: env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast == 'true'
         run: |
           echo "❌ UI tests failed and fail_fast is enabled. Stopping workflow."
           exit 1
 
-  # Android UI Tests - CORRECTED VERSION (Missing Build Step Added)
+  # Android UI Tests
   android-ui-tests:
-    runs-on: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 40
     needs: [setup, unit-tests]
-    if: ${{ needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
     outputs:
       ui_test_status: ${{ steps.ui_test_results.outputs.status }}
       ui_test_details: ${{ steps.ui_test_results.outputs.details }}
@@ -431,7 +488,7 @@ jobs:
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
@@ -439,7 +496,7 @@ jobs:
           cache-dependency-path: './private-repo/yarn.lock'
 
       - name: Setup Node.js (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -462,14 +519,14 @@ jobs:
           swap-storage: true
 
       - name: Setup Java (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-java@v4
         with:
           java-version: 17
           distribution: adopt
 
       - name: Setup Java (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-java@v4
         with:
           java-version: 17
@@ -517,21 +574,21 @@ jobs:
           EOF
 
       - name: Cache Gradle Wrapper (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/cache@v3
         with:
           path: ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
 
       - name: Cache Gradle Wrapper (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/cache@v3
         with:
           path: ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
 
       - name: Cache Gradle Dependencies (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/cache@v3
         with:
           path: ~/.gradle/caches
@@ -540,7 +597,7 @@ jobs:
             ${{ runner.os }}-gradle-caches-
 
       - name: Cache Gradle Dependencies (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/cache@v3
         with:
           path: ~/.gradle/caches
@@ -680,16 +737,16 @@ jobs:
           retention-days: 3
 
       - name: Check UI Test Failure
-        if: ${{ failure() && needs.setup.outputs.fail_fast != 'false' }}
+        if: failure() && needs.setup.outputs.fail_fast == 'true'
         run: |
           echo "❌ UI tests failed and fail_fast is enabled. Stopping workflow."
           exit 1
 
   # iOS Build & Deploy
   ios-build:
-    runs-on: ${{ needs.setup.outputs.runner_type == 'warpbuild' && 'warp-macos-latest-arm64-6x' || 'macos-15' }}
+    runs-on: ${{ needs.setup.outputs.ios_runner }}
     needs: [setup, ios-ui-tests, unit-tests]
-    if: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
+    if: needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
     env:
       IOS_DIR: ${{ github.workspace }}/private-repo/ios
       ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/LittleTalks.xcarchive
@@ -699,7 +756,7 @@ jobs:
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
 
       - name: Check Prerequisites for Store Distribution
-        if: ${{ needs.setup.outputs.track == 'production' }}
+        if: needs.setup.outputs.track == 'production'
         run: |
           echo "🔍 Checking prerequisites for App Store distribution..."
           UI_TESTS_PASSED="${{ needs.ios-ui-tests.outputs.ui_tests_passed }}"
@@ -730,7 +787,7 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: WarpBuild Xcode & CocoaPods Compatibility
-        if: contains(needs.setup.outputs.runner_type, 'warpbuild')
+        if: needs.setup.outputs.use_warpbuild == 'true'
         working-directory: ./private-repo
         run: |
           echo "🚀 Configuring WarpBuild for optimal performance..."
@@ -835,7 +892,7 @@ jobs:
       - name: Install CocoaPods dependencies
         working-directory: ./private-repo/ios
         run: |
-          if [[ "${{ needs.setup.outputs.runner_type }}" == *"warp"* ]]; then
+          if [[ "${{ needs.setup.outputs.use_warpbuild }}" == "true" ]]; then
             pod install --clean-install --repo-update
           else
             pod install --clean-install --repo-update
@@ -926,10 +983,10 @@ jobs:
 
   # Android Build & Deploy
   android-build:
-    runs-on: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
     needs: [setup, android-ui-tests, unit-tests]
-    if: ${{ needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false') }}
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
     steps:
@@ -937,7 +994,7 @@ jobs:
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
 
       - name: Check Prerequisites for Store Distribution
-        if: ${{ needs.setup.outputs.track == 'production' }}
+        if: needs.setup.outputs.track == 'production'
         run: |
           echo "🔍 Checking prerequisites for Google Play distribution..."
           UI_TESTS_PASSED="${{ needs.android-ui-tests.outputs.ui_tests_passed }}"
@@ -957,7 +1014,7 @@ jobs:
           path: ./private-repo
 
       - name: Install Java (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-java@v4
         with:
           java-version: 17
@@ -965,7 +1022,7 @@ jobs:
           distribution: adopt
 
       - name: Install Java (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-java@v4
         with:
           java-version: 17
@@ -973,7 +1030,7 @@ jobs:
           distribution: adopt
 
       - name: Setup Node (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
@@ -981,7 +1038,7 @@ jobs:
           cache-dependency-path: './private-repo/yarn.lock'
 
       - name: Setup Node (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -993,7 +1050,7 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Cache Gradle (buildjet)
-        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/cache@v3
         with:
           path: |
@@ -1002,7 +1059,7 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Cache Gradle (default)
-        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/cache@v3
         with:
           path: |
@@ -1071,7 +1128,8 @@ jobs:
         run: |
           echo "🚀 LittlePipes Build Complete!"
           echo "Target: ${{ needs.setup.outputs.target_repo }}"
-          echo "Runner Type: ${{ needs.setup.outputs.runner_type }}"
+          echo "Platform: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && 'both' || needs.setup.outputs.build_ios == 'true' && 'iOS' || 'Android' }}"
+          echo "Speed: ${{ needs.setup.outputs.use_buildjet == 'true' || needs.setup.outputs.use_warpbuild == 'true' && 'Fast' || 'GitHub' }}"
           echo ""
           echo "🧪 Unit Tests: ${{ needs.unit-tests.result || '⏭️ Skipped' }}"
           echo ""

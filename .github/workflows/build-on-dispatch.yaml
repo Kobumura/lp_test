@@ -81,8 +81,17 @@ jobs:
           token: ${{ secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
-      - name: Setup Node.js
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/setup-node@v4' || 'actions/setup-node@v4' }}
+      - name: Setup Node.js (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Setup Node.js (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'yarn'
@@ -421,8 +430,17 @@ jobs:
           token: ${{ secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
-      - name: Setup Node.js
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/setup-node@v4' || 'actions/setup-node@v4' }}
+      - name: Setup Node.js (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Setup Node.js (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'yarn'
@@ -443,8 +461,16 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Setup Java
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/setup-java@v4' || 'actions/setup-java@v4' }}
+      - name: Setup Java (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/setup-java@v4
+        with:
+          java-version: 17
+          distribution: adopt
+
+      - name: Setup Java (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: adopt
@@ -490,14 +516,32 @@ jobs:
           org.gradle.unsafe.configuration-cache=false
           EOF
 
-      - name: Cache Gradle Wrapper
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/cache@v3' || 'actions/cache@v3' }}
+      - name: Cache Gradle Wrapper (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/cache@v3
         with:
           path: ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
 
-      - name: Cache Gradle Dependencies
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/cache@v3' || 'actions/cache@v3' }}
+      - name: Cache Gradle Wrapper (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle Dependencies (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-caches-
+
+      - name: Cache Gradle Dependencies (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/cache@v3
         with:
           path: ~/.gradle/caches
           key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
@@ -912,15 +956,33 @@ jobs:
           token: ${{ secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
-      - name: Install Java
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/setup-java@v4' || 'actions/setup-java@v4' }}
+      - name: Install Java (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/setup-java@v4
         with:
           java-version: 17
           cache: gradle
           distribution: adopt
 
-      - name: Setup Node
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/setup-node@v4' || 'actions/setup-node@v4' }}
+      - name: Install Java (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          cache: gradle
+          distribution: adopt
+
+      - name: Setup Node (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Setup Node (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'yarn'
@@ -930,8 +992,18 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      - name: Cache Gradle
-        uses: ${{ needs.setup.outputs.runner_type == 'buildjet' && 'buildjet/cache@v3' || 'actions/cache@v3' }}
+      - name: Cache Gradle (buildjet)
+        if: ${{ needs.setup.outputs.runner_type == 'buildjet' }}
+        uses: buildjet/cache@v3
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle (default)
+        if: ${{ needs.setup.outputs.runner_type != 'buildjet' }}
+        uses: actions/cache@v3
         with:
           path: |
             ~/.gradle/wrapper

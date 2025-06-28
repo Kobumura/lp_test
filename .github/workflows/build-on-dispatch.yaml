@@ -57,8 +57,8 @@ jobs:
           fi
           
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
-          echo "build_ios=$([[ $PLATFORM == "ios" || $PLATFORM == "both" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "build_android=$([[ $PLATFORM == "android" || $PLATFORM == "both" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "build_ios=$([[ $PLATFORM == \"ios\" || $PLATFORM == \"both\" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "build_android=$([[ $PLATFORM == \"android\" || $PLATFORM == \"both\" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "run_ui_tests=$RUN_UI_TESTS" >> $GITHUB_OUTPUT
           echo "run_unit_tests=$RUN_UNIT_TESTS" >> $GITHUB_OUTPUT
           echo "run_build=$RUN_BUILD" >> $GITHUB_OUTPUT

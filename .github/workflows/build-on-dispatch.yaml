@@ -1248,8 +1248,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         continue-on-error: true
         with:
-          with:
-            serviceAccountJson: /tmp/google-play-key.json
+          serviceAccountJson: /tmp/google-play-key.json
           packageName: com.littletalks.app
           releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ needs.setup.outputs.track }}

@@ -849,9 +849,11 @@ jobs:
 
       - name: Get latest build number from App Store Connect
         working-directory: ./private-repo/ios
+        env:
+          FASTLANE_OPT_OUT_USAGE: "YES"  # 👈 ADD THIS TO DISABLE ANALYTICS
         run: |
           echo "🔍 Querying App Store Connect for latest build number..."
-          
+
           # Try to get the latest build number from App Store Connect
           if command -v fastlane &> /dev/null; then
             # Use fastlane to query App Store Connect
@@ -861,7 +863,7 @@ jobs:
             echo "⚠️ Fastlane not available, using project file"
             LATEST_ASC_BUILD="0"
           fi
-          
+
           echo "LATEST_ASC_BUILD=$LATEST_ASC_BUILD" >> $GITHUB_ENV
 
       - name: Read and determine next iOS version

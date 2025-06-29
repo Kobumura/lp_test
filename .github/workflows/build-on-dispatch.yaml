@@ -673,6 +673,8 @@ jobs:
           disable-animations: true
           working-directory: ./private-repo
           script: |
+            TEST_FILE="signup-flow.yml"
+            
             echo "📱 Installing APK on emulator..."
             adb install android/app/build/outputs/apk/debug/app-debug.apk
             
@@ -684,18 +686,7 @@ jobs:
             adb shell "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'" | grep -q "com.littletalks.app" && echo "✅ App focused" || echo "⚠️ App may not be focused"
             
             echo "🧪 Running Maestro UI tests"
-            # Use multiple fallback methods for Maestro (same as iOS fix)
-            if command -v maestro &> /dev/null; then
-              echo "✅ Using maestro from PATH"
-              maestro test ".maestro/signup-flow.yml"
-            elif [ -f "$HOME/.maestro/bin/maestro" ]; then
-              echo "✅ Using maestro from direct path"
-              $HOME/.maestro/bin/maestro test ".maestro/signup-flow.yml"
-            else
-              echo "❌ Maestro not found!"
-              exit 1
-            fi
-            
+            maestro test ".maestro/$TEST_FILE"
             echo "✅ Android UI tests completed successfully"
 
       - name: Set UI Test Results

@@ -1,4 +1,5 @@
 name: LittlePipes Unified Build, Test & Deploy
+
 on:
   repository_dispatch:
     types: [build-ios, build-android, build-both]
@@ -18,7 +19,6 @@ on:
         type: choice
         options: [github, fast]
         default: 'github'
-
 
 jobs:
   setup:
@@ -752,7 +752,8 @@ jobs:
       ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/LittleTalks.xcarchive
       EXPORT_PATH: ${{ github.workspace }}/private-repo/ios/build/export
       # Secrets from dispatch payload or fallback to repo secrets
-      MATCH_SSH_KEY: ${{ github.event.client_payload.secrets.MATCH_SSH_KEY || secrets.MATCH_SSH_KEY }}
+      MATCH_SSH_KEY_B64: ${{ github.event.client_payload.secrets.MATCH_SSH_KEY_B64 || '' }}
+      MATCH_SSH_KEY_REPO: ${{ secrets.MATCH_SSH_KEY || '' }}
       MATCH_GIT_URL: ${{ github.event.client_payload.secrets.MATCH_GIT_URL || secrets.MATCH_GIT_URL }}
       MATCH_PASSWORD: ${{ github.event.client_payload.secrets.MATCH_PASSWORD || secrets.MATCH_PASSWORD }}
       APPLE_TEAM_ID: ${{ github.event.client_payload.secrets.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
@@ -870,9 +871,30 @@ jobs:
       - name: Setup SSH key for Match
         run: |
           mkdir -p ~/.ssh
-          echo "$MATCH_SSH_KEY" > ~/.ssh/id_rsa
+          
+          # Use base64 encoded SSH key from dispatch if available, otherwise use repo secret
+          if [ -n "$MATCH_SSH_KEY_B64" ]; then
+            echo "🔑 Using SSH key from repository dispatch"
+            echo "$MATCH_SSH_KEY_B64" | base64 -d > ~/.ssh/id_rsa
+          elif [ -n "$MATCH_SSH_KEY_REPO" ]; then
+            echo "🔑 Using SSH key from repository secrets"
+            echo "$MATCH_SSH_KEY_REPO" > ~/.ssh/id_rsa
+          else
+            echo "❌ No SSH key available"
+            exit 1
+          fi
+          
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          # Verify SSH key format
+          echo "🔑 SSH key validation:"
+          if ssh-keygen -l -f ~/.ssh/id_rsa; then
+            echo "✅ SSH key format is valid"
+          else
+            echo "❌ SSH key format is invalid"
+            exit 1
+          fi
 
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
@@ -994,7 +1016,8 @@ jobs:
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_ALIAS || secrets.ANDROID_RELEASE_KEY_ALIAS }}
       ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
-      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
     steps:
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
@@ -1100,11 +1123,27 @@ jobs:
             -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
             --stacktrace
 
+      - name: Prepare Google Play Credentials
+        run: |
+          # Use base64 encoded JSON from dispatch if available, otherwise use repo secret
+          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
+            echo "🔑 Using Google Play JSON from repository dispatch"
+            GOOGLE_PLAY_JSON=$(echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d)
+          elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
+            echo "🔑 Using Google Play JSON from repository secrets"
+            GOOGLE_PLAY_JSON="$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO"
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+          
+          echo "GOOGLE_PLAY_JSON_FINAL=$GOOGLE_PLAY_JSON" >> $GITHUB_ENV
+
       - name: Upload to Google Play
         uses: r0adkll/upload-google-play@v1
         continue-on-error: true
         with:
-          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_JSON_FINAL }}
           packageName: com.littletalks.app
           releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ needs.setup.outputs.track }}

@@ -850,15 +850,24 @@ jobs:
       - name: Get latest build number from App Store Connect
         working-directory: ./private-repo/ios
         env:
-          FASTLANE_OPT_OUT_USAGE: "YES"  # 👈 ADD THIS TO DISABLE ANALYTICS
+          FASTLANE_OPT_OUT_USAGE: "YES"
         run: |
           echo "🔍 Querying App Store Connect for latest build number..."
 
-          # Try to get the latest build number from App Store Connect
           if command -v fastlane &> /dev/null; then
-            # Use fastlane to query App Store Connect
-            LATEST_ASC_BUILD=$(fastlane run latest_testflight_build_number app_identifier:"com.littletalks.app" api_key_path:"fastlane/api_key.json" || echo "0")
-            echo "📱 Latest build in App Store Connect: $LATEST_ASC_BUILD"
+            # Run fastlane and capture output to file (includes all logs)
+            if fastlane run latest_testflight_build_number app_identifier:"com.littletalks.app" api_key_path:"fastlane/api_key.json" > /tmp/fastlane_output.txt 2>&1; then
+              # Extract only the build number (should be just digits)
+              LATEST_ASC_BUILD=$(grep -o '^[0-9]\+$' /tmp/fastlane_output.txt | tail -1 || echo "0")
+              echo "📱 Latest build in App Store Connect: $LATEST_ASC_BUILD"
+
+              # Show what we captured for debugging
+              echo "🔍 Fastlane output for debugging:"
+              cat /tmp/fastlane_output.txt
+            else
+              echo "⚠️ Fastlane query failed, using project file"
+              LATEST_ASC_BUILD="0"
+            fi
           else
             echo "⚠️ Fastlane not available, using project file"
             LATEST_ASC_BUILD="0"

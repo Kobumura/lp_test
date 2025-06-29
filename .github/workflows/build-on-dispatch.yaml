@@ -1235,22 +1235,21 @@ jobs:
           # Use base64 encoded JSON from dispatch if available, otherwise use repo secret
           if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
             echo "🔑 Using Google Play JSON from repository dispatch"
-            GOOGLE_PLAY_JSON=$(echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d)
+            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
             echo "🔑 Using Google Play JSON from repository secrets"
-            GOOGLE_PLAY_JSON="$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO"
+            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
           else
             echo "❌ No Google Play service account JSON available"
             exit 1
           fi
-          
-          echo "GOOGLE_PLAY_JSON_FINAL=$GOOGLE_PLAY_JSON" >> $GITHUB_ENV
 
       - name: Upload to Google Play
         uses: r0adkll/upload-google-play@v1
         continue-on-error: true
         with:
-          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_JSON_FINAL }}
+          with:
+            serviceAccountJson: /tmp/google-play-key.json
           packageName: com.littletalks.app
           releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ needs.setup.outputs.track }}

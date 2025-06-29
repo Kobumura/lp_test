@@ -1232,21 +1232,79 @@ jobs:
 
       - name: Prepare Google Play Credentials
         run: |
-          # Use base64 encoded JSON from dispatch if available, otherwise use repo secret
           if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
-            echo "🔑 Using Google Play JSON from repository dispatch"
             echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
-            echo "🔑 Using Google Play JSON from repository secrets"
             echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
           else
             echo "❌ No Google Play service account JSON available"
             exit 1
           fi
 
-      - name: Upload to Google Play
-        uses: r0adkll/upload-google-play@v1
+      - name: Upload to Google Play (Attempt 1)
+        id: upload_attempt_1
         continue-on-error: true
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJson: /tmp/google-play-key.json
+          packageName: com.littletalks.app
+          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+          track: ${{ needs.setup.outputs.track }}
+          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+
+      - name: Retry with incremented build number (Attempt 2)
+        if: steps.upload_attempt_1.outcome == 'failure'
+        working-directory: ./private-repo/android
+        run: |
+          echo "🔄 First upload failed, incrementing build number..."
+          NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
+          echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
+          
+          # Update gradle file
+          sed -i "s/: ${{ env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
+          
+          # Rebuild AAB
+          ./gradlew bundleRelease \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+            -PlittleVersionCode=$NEW_BUILD_NUMBER \
+            --stacktrace
+
+      - name: Upload to Google Play (Attempt 2)
+        if: steps.upload_attempt_1.outcome == 'failure'
+        id: upload_attempt_2
+        continue-on-error: true
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJson: /tmp/google-play-key.json
+          packageName: com.littletalks.app
+          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+          track: ${{ needs.setup.outputs.track }}
+          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+
+      - name: Retry with incremented build number (Attempt 3)
+        if: steps.upload_attempt_2.outcome == 'failure'
+        working-directory: ./private-repo/android
+        run: |
+          echo "🔄 Second upload failed, incrementing build number again..."
+          NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
+          echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
+          
+          # Update gradle file
+          sed -i "s/: ${{ env.RETRY_VERSION_CODE || env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
+          
+          # Rebuild AAB
+          ./gradlew bundleRelease \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+            -PlittleVersionCode=$NEW_BUILD_NUMBER \
+            --stacktrace
+
+      - name: Upload to Google Play (Final Attempt)
+        if: steps.upload_attempt_2.outcome == 'failure'
+        uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJson: /tmp/google-play-key.json
           packageName: com.littletalks.app
@@ -1257,16 +1315,16 @@ jobs:
       - name: Set Google Play Status
         run: |
           echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }})" >> $GITHUB_ENV
-
-      - name: Commit version bump to private repo
-        working-directory: ./private-repo
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
-          git push
+          if [[ "${{ steps.upload_attempt_1.outcome }}" == "success" ]]; then
+            USED_BUILD_NUMBER=${{ env.NEXT_VERSION_CODE }}
+          elif [[ "${{ steps.upload_attempt_2.outcome }}" == "success" ]]; then
+            USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
+          else
+            USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
+          fi
+          
+          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build $USED_BUILD_NUMBER)" >> $GITHUB_ENV
+          echo "FINAL_VERSION_CODE=$USED_BUILD_NUMBER" >> $GITHUB_ENV
 
   # Summary
   summary:

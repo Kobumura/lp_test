@@ -748,6 +748,11 @@ jobs:
       MATCH_GIT_URL: ${{ github.event.client_payload.secrets.MATCH_GIT_URL || secrets.MATCH_GIT_URL }}
       MATCH_PASSWORD: ${{ github.event.client_payload.secrets.MATCH_PASSWORD || secrets.MATCH_PASSWORD }}
       APPLE_TEAM_ID: ${{ github.event.client_payload.secrets.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
+      # ADDED: ASC API CREDENTIALS WITH BASE64 HANDLING
+      ASC_API_KEY_ID: ${{ github.event.client_payload.secrets.ASC_API_KEY_ID || secrets.ASC_API_KEY_ID }}
+      ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
+      ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
+      ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
     steps:
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
@@ -807,6 +812,40 @@ jobs:
           echo "COVERAGE=12.58%" >> $GITHUB_ENV
           echo "UI_TEST_STATUS=${{ needs.ios-ui-tests.outputs.ui_test_status || '⏭️ UI Tests Skipped' }}" >> $GITHUB_ENV
           echo "UI_TEST_DETAILS=${{ needs.ios-ui-tests.outputs.ui_test_details || 'No UI testing performed' }}" >> $GITHUB_ENV
+
+      # ADDED: Setup App Store Connect API Key with base64 decoding
+      - name: Setup App Store Connect API Key
+        working-directory: ./private-repo
+        run: |
+          echo "🔑 Setting up App Store Connect API key..."
+          mkdir -p ios/fastlane
+          
+          # Handle base64-encoded private key from dispatch or direct from secrets
+          if [ -n "$ASC_API_KEY_P8_B64" ]; then
+            echo "🔑 Using ASC API key from repository dispatch (base64 encoded)"
+            ASC_API_KEY_P8_CONTENT=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
+          elif [ -n "$ASC_API_KEY_P8_REPO" ]; then
+            echo "🔑 Using ASC API key from repository secrets (direct)"
+            ASC_API_KEY_P8_CONTENT="$ASC_API_KEY_P8_REPO"
+          else
+            echo "❌ No ASC API key available"
+            exit 1
+          fi
+          
+          # Create the api_key.json file
+          cat > ios/fastlane/api_key.json << EOF
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID", 
+            "key": "$ASC_API_KEY_P8_CONTENT",
+            "duration": 1200,
+            "in_house": false
+          }
+          EOF
+          
+          echo "✅ App Store Connect API key file created"
+          echo "Key ID: $ASC_API_KEY_ID"
+          echo "Issuer ID: $ASC_ISSUER_ID"
 
       - name: Get latest build number from App Store Connect
         working-directory: ./private-repo

@@ -1,5 +1,4 @@
 name: LittlePipes Unified Build, Test & Deploy
-
 on:
   repository_dispatch:
     types: [build-ios, build-android, build-both]
@@ -19,6 +18,7 @@ on:
         type: choice
         options: [github, fast]
         default: 'github'
+
 
 jobs:
   setup:
@@ -135,7 +135,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
@@ -183,7 +183,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
       - name: Setup Node.js
@@ -484,7 +484,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
@@ -751,6 +751,11 @@ jobs:
       IOS_DIR: ${{ github.workspace }}/private-repo/ios
       ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/LittleTalks.xcarchive
       EXPORT_PATH: ${{ github.workspace }}/private-repo/ios/build/export
+      # Secrets from dispatch payload or fallback to repo secrets
+      MATCH_SSH_KEY: ${{ github.event.client_payload.secrets.MATCH_SSH_KEY || secrets.MATCH_SSH_KEY }}
+      MATCH_GIT_URL: ${{ github.event.client_payload.secrets.MATCH_GIT_URL || secrets.MATCH_GIT_URL }}
+      MATCH_PASSWORD: ${{ github.event.client_payload.secrets.MATCH_PASSWORD || secrets.MATCH_PASSWORD }}
+      APPLE_TEAM_ID: ${{ github.event.client_payload.secrets.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
     steps:
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
@@ -772,7 +777,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
       - name: Setup Node.js
@@ -865,16 +870,12 @@ jobs:
       - name: Setup SSH key for Match
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.MATCH_SSH_KEY }}" > ~/.ssh/id_rsa
+          echo "$MATCH_SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan github.com >> ~/.ssh/known_hosts
 
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
-        env:
-          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           fastlane match appstore \
             --git_url "$MATCH_GIT_URL" \
@@ -910,7 +911,7 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+            DEVELOPMENT_TEAM=$APPLE_TEAM_ID \
             ENABLE_BITCODE=NO \
             -jobs 2 \
             -allowProvisioningUpdates
@@ -918,7 +919,7 @@ jobs:
       - name: Create exportOptions.plist
         working-directory: ./private-repo
         run: |
-          cat > ios/exportOptions.plist << 'EOF'
+          cat > ios/exportOptions.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -926,7 +927,7 @@ jobs:
               <key>method</key>
               <string>app-store</string>
               <key>teamID</key>
-              <string>${{ secrets.APPLE_TEAM_ID }}</string>
+              <string>$APPLE_TEAM_ID</string>
               <key>uploadBitcode</key>
               <false/>
               <key>uploadSymbols</key>
@@ -989,6 +990,11 @@ jobs:
     if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
+      # Secrets from dispatch payload or fallback to repo secrets
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_ALIAS || secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
     steps:
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
@@ -1010,7 +1016,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
-          token: ${{ secrets.TARGET_REPO_TOKEN }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
       - name: Install Java (buildjet)
@@ -1088,9 +1094,9 @@ jobs:
         working-directory: ./private-repo/android
         run: |
           ./gradlew bundleRelease \
-            -PsigningKeystorePassword="${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}" \
-            -PsigningKeyAlias="${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}" \
-            -PsigningKeyPassword="${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}" \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
             -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
             --stacktrace
 
@@ -1098,7 +1104,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         continue-on-error: true
         with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.littletalks.app
           releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ needs.setup.outputs.track }}

@@ -1316,7 +1316,7 @@ jobs:
               # Test JSON parsing without showing secrets
               echo "🧪 Testing JSON parsing..."
               python3 -c "
-  import json
+              import json
 try:
   with open('/tmp/google-play-key.json') as f:
     data = json.load(f)

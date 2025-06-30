@@ -1220,6 +1220,18 @@ jobs:
           pip install codemagic-cli-tools
           echo "✅ Codemagic CLI tools installed"
 
+      # ✅ FIXED: Moved this step BEFORE the build number query
+      - name: Prepare Google Play Credentials
+        run: |
+          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
+            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
+            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+
       - name: Get latest build number from Google Play Console (FAULT TOLERANT)
         run: |
           echo "🔍 Querying Google Play Console for latest build number..."
@@ -1321,17 +1333,6 @@ jobs:
             -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
             -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
             --stacktrace
-
-      - name: Prepare Google Play Credentials
-        run: |
-          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
-          elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
-          else
-            echo "❌ No Google Play service account JSON available"
-            exit 1
-          fi
 
       - name: Upload to Google Play (Attempt 1)
         id: upload_attempt_1

@@ -1220,48 +1220,72 @@ jobs:
           pip install codemagic-cli-tools
           echo "✅ Codemagic CLI tools installed"
 
-      # ✅ FIXED: Moved this step BEFORE the build number query
+      # ✅ FIXED: Use exact same credential pattern as debug workflow
       - name: Prepare Google Play Credentials
+        env:
+          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
-          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
-          elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
+          echo "🔑 Setting up Google Play credentials..."
+          
+          # Use the same pattern that works in debug workflow
+          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
+            echo "🔑 Using Google Play JSON from repository dispatch (base64)"
+            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
+            echo "🔑 Using Google Play JSON from repository secrets (direct)"
+            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
           else
             echo "❌ No Google Play service account JSON available"
             exit 1
           fi
+          
+          # Verify the JSON file is valid (same as debug)
+          echo "🔍 Validating JSON file..."
+          if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
+            echo "✅ JSON file is valid"
+          else
+            echo "❌ JSON file is invalid"
+            exit 1
+          fi
 
-      - name: Get latest build number from Google Play Console (FAULT TOLERANT)
+      # ✅ FIXED: Run from root directory like debug workflow
+      - name: Get latest build number from Google Play Console (FIXED)
         run: |
           echo "🔍 Querying Google Play Console for latest build number..."
+          echo "📋 Working directory: $(pwd)"
+          echo "📋 Runner type: ${{ needs.setup.outputs.android_runner }}"
           
-          # Query track for latest build (handles ALL statuses: draft, completed, inProgress, halted)
+          # Query track for latest build
           QUERY_TRACK="${{ needs.setup.outputs.track }}"
           echo "📋 Querying track: $QUERY_TRACK"
           
-          # Use Codemagic CLI to get latest build number (using file credentials)
+          # Use EXACT same command that works in debug workflow
+          echo "🧪 Using exact debug workflow command..."
           if LATEST_GOOGLE_PLAY_BUILD=$(google-play get-latest-build-number \
               --package-name "com.littletalks.app" \
               --tracks "$QUERY_TRACK" \
-              --credentials "@file:/tmp/google-play-key.json" 2>/dev/null); then
+              --credentials "@file:/tmp/google-play-key.json" 2>&1); then
           
-            echo "📱 Latest build number on Google Play track '$QUERY_TRACK': $LATEST_GOOGLE_PLAY_BUILD"
+            # Parse the output (debug shows it returns multiple lines)
+            PARSED_BUILD=$(echo "$LATEST_GOOGLE_PLAY_BUILD" | grep -o '[0-9]\+$' | tail -1)
           
-            # Validate it's a number
-            if [[ "$LATEST_GOOGLE_PLAY_BUILD" =~ ^[0-9]+$ ]]; then
+            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
+              echo "📱 Latest build number on Google Play track '$QUERY_TRACK': $PARSED_BUILD"
               echo "✅ Valid build number retrieved from Google Play Console"
+              LATEST_GOOGLE_PLAY_BUILD="$PARSED_BUILD"
             else
-              echo "⚠️ Invalid build number format, using project file fallback"
+              echo "⚠️ Could not parse build number from output, using project file fallback"
+              echo "🔍 Full output was: $LATEST_GOOGLE_PLAY_BUILD"
               LATEST_GOOGLE_PLAY_BUILD="0"
             fi
           else
             echo "⚠️ Google Play Console query failed, using project file fallback"
+            echo "🔍 Error was: $LATEST_GOOGLE_PLAY_BUILD"
             LATEST_GOOGLE_PLAY_BUILD="0"
           fi
           
           echo "LATEST_GOOGLE_PLAY_BUILD=$LATEST_GOOGLE_PLAY_BUILD" >> $GITHUB_ENV
-
       - name: Read and determine next Android version (FAULT TOLERANT)
         working-directory: ./private-repo/android/app
         run: |

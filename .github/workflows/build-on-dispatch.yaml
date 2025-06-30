@@ -1214,33 +1214,33 @@ jobs:
             ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-
+      # ✅ FIXED: BuildJet-compatible Codemagic CLI installation
       - name: Install Codemagic CLI Tools (BuildJet Compatible)
         run: |
           echo "📦 Installing Codemagic CLI tools..."
-
+          
           if [ "${{ needs.setup.outputs.use_buildjet }}" = "true" ]; then
             echo "🔧 Applying BuildJet dependency fixes..."
             pip install --upgrade pip setuptools wheel
-
+          
             # Fix OpenSSL/cryptography conflicts on BuildJet
             pip install --upgrade 'cryptography>=3.4.8'
             pip install --force-reinstall 'pyOpenSSL>=22.0.0'
           else
             echo "🏃‍♂️ Using GitHub runners - clean environment, no fixes needed"
           fi
-
+          
           # Install Codemagic CLI (works on both environments after fixes)
           pip install codemagic-cli-tools
-
+          
           echo "✅ Codemagic CLI tools installed"
-
+          
           # Verify installation works
           echo "🔧 Verifying Codemagic CLI installation:"
           python3 -c "from codemagic.tools import GooglePlay; print('✅ GooglePlay import successful')" || echo "❌ Import failed"
           google-play --version || echo "❌ CLI command failed"
 
-      # ✅ FIXED: Use exact same credential pattern as debug workflow
+      # ✅ FIXED: Moved this step BEFORE the build number query
       - name: Prepare Google Play Credentials
         env:
           GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
@@ -1269,8 +1269,8 @@ jobs:
             exit 1
           fi
 
-      # ✅ FIXED: Run from root directory like debug workflow
-      - name: Get latest build number from Google Play Console (FIXED)
+      # ✅ ENHANCED: Enhanced Google Play query with verbose debugging
+      - name: Get latest build number from Google Play Console (ENHANCED DEBUG)
         run: |
           echo "🔍 Querying Google Play Console for latest build number..."
           echo "📋 Working directory: $(pwd)"
@@ -1280,188 +1280,262 @@ jobs:
           QUERY_TRACK="${{ needs.setup.outputs.track }}"
           echo "📋 Querying track: $QUERY_TRACK"
           
-          # Use EXACT same command that works in debug workflow
-          echo "🧪 Using exact debug workflow command..."
-          if LATEST_GOOGLE_PLAY_BUILD=$(google-play get-latest-build-number \
+          # Try with verbose flag first
+          echo "🧪 Attempting verbose query..."
+          if VERBOSE_RESULT=$(google-play get-latest-build-number \
               --package-name "com.littletalks.app" \
               --tracks "$QUERY_TRACK" \
-              --credentials "@file:/tmp/google-play-key.json" 2>&1); then
+              --credentials "@file:/tmp/google-play-key.json" \
+              --verbose 2>&1); then
           
-            # Parse the output (debug shows it returns multiple lines)
-            PARSED_BUILD=$(echo "$LATEST_GOOGLE_PLAY_BUILD" | grep -o '[0-9]\+$' | tail -1)
+            echo "✅ Verbose query succeeded:"
+            echo "$VERBOSE_RESULT"
           
+            # Parse the successful result
+            PARSED_BUILD=$(echo "$VERBOSE_RESULT" | grep -o '[0-9]\+$' | tail -1)
             if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-              echo "📱 Latest build number on Google Play track '$QUERY_TRACK': $PARSED_BUILD"
-              echo "✅ Valid build number retrieved from Google Play Console"
               LATEST_GOOGLE_PLAY_BUILD="$PARSED_BUILD"
             else
-              echo "⚠️ Could not parse build number from output, using project file fallback"
-              echo "🔍 Full output was: $LATEST_GOOGLE_PLAY_BUILD"
               LATEST_GOOGLE_PLAY_BUILD="0"
             fi
           else
-            echo "⚠️ Google Play Console query failed, using project file fallback"
-            echo "🔍 Error was: $LATEST_GOOGLE_PLAY_BUILD"
+            echo "❌ Verbose query failed:"
+            echo "$VERBOSE_RESULT"
+          
+            echo ""
+            echo "🔍 Checking for log files..."
+            find /tmp -name "*codemagic*.log" -exec echo "Found log: {}" \; -exec cat {} \; 2>/dev/null || echo "No log files found"
+          
+            echo ""
+            echo "🔍 Testing credential file access..."
+            if [ -f "/tmp/google-play-key.json" ]; then
+              echo "✅ Credential file exists"
+              echo "📏 File size: $(wc -c < /tmp/google-play-key.json) bytes"
+              echo "🔍 File permissions: $(ls -la /tmp/google-play-key.json)"
+          
+              # Test JSON parsing without showing secrets
+              echo "🧪 Testing JSON parsing..."
+              python3 -c "
+  import json
+try:
+  with open('/tmp/google-play-key.json') as f:
+    data = json.load(f)
+  print(f'✅ JSON valid - type: {data.get(\"type\", \"unknown\")}')
+    print(f'📧 Client email: {data.get(\"client_email\", \"missing\")}')
+    print(f'🆔 Project ID: {data.get(\"project_id\", \"missing\")}')
+except Exception as e:
+    print(f'❌ JSON error: {e}')
+"
+            else
+              echo "❌ Credential file missing"
+            fi
+            
+            echo ""
+            echo "🧪 Testing alternative approach - all tracks..."
+            google-play get-latest-build-number \
+              --package-name "com.littletalks.app" \
+              --credentials "@file:/tmp/google-play-key.json" \
+              --verbose 2>&1 || echo "Alternative approach also failed"
+            
             LATEST_GOOGLE_PLAY_BUILD="0"
           fi
           
+          echo ""
+          echo "📋 Final result: LATEST_GOOGLE_PLAY_BUILD=$LATEST_GOOGLE_PLAY_BUILD"
           echo "LATEST_GOOGLE_PLAY_BUILD=$LATEST_GOOGLE_PLAY_BUILD" >> $GITHUB_ENV
+
+      # ✅ ADDED: Read debug logs
+      - name: Read Codemagic Debug Logs
+        if: always()
+        run: |
+          echo "🔍 Searching for Codemagic log files..."
+          
+          # Find all codemagic log files
+          find /tmp -name "*codemagic*.log" -type f 2>/dev/null | while read -r logfile; do
+            echo ""
+            echo "📋 === LOG FILE: $logfile ==="
+            echo "📏 Size: $(wc -c < "$logfile" 2>/dev/null || echo "unknown") bytes"
+            echo "🕐 Modified: $(ls -la "$logfile" 2>/dev/null || echo "unknown")"
+            echo ""
+            echo "📄 CONTENT:"
+            cat "$logfile" 2>/dev/null || echo "Could not read log file"
+            echo ""
+            echo "📋 === END LOG FILE ==="
+          done
+          
+          # Also check for any other relevant logs
+          echo ""
+          echo "🔍 Other potential log locations:"
+          ls -la /tmp/ | grep -E "(log|codemagic|google)" || echo "No relevant files found"
+
+      # ✅ ADDED: Upload debug artifacts
+      - name: Upload Debug Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-play-debug-logs
+          path: |
+            /tmp/*codemagic*.log
+            /tmp/google-play-key.json
+          retention-days: 1
+          if-no-files-found: ignore
+
       - name: Read and determine next Android version (FAULT TOLERANT)
         working-directory: ./private-repo/android/app
         run: |
           CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
-          CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
-          
-          # Determine the next build number (FAULT TOLERANT!)
-          if [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" -gt "$CURRENT_VERSION_CODE" ]; then
-            echo "🔄 Google Play Console has newer build ($LATEST_GOOGLE_PLAY_BUILD) than project file ($CURRENT_VERSION_CODE)"
-            echo "📋 This prevents conflicts from:"
-            echo "   ✅ Draft releases with higher version codes"
-            echo "   ✅ Failed builds that left version gaps"
-            echo "   ✅ Multi-developer version conflicts"
-            echo "   ✅ Track-specific version inconsistencies"
-            NEXT_BUILD=$((LATEST_GOOGLE_PLAY_BUILD + 1))
-            STRATEGY="Google Play Console + 1"
-          else
-            echo "✅ Project file is current or newer, incrementing from project file"
-            NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
-            STRATEGY="Project File + 1"
-          fi
-          
-          # Version name increment
-          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
-          MAJOR=${VERSION_PARTS[0]}
-          MINOR=${VERSION_PARTS[1]}
-          PATCH=${VERSION_PARTS[2]}
-          NEXT_PATCH=$((PATCH + 1))
-          NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
-          
-          echo ""
-          echo "📋 Fault-Tolerant Version Resolution:"
-          echo "  Current Version: $CURRENT_VERSION_NAME (build $CURRENT_VERSION_CODE)"
-          echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
-          echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
-          echo "  Strategy Used: $STRATEGY"
-          echo "  Track Queried: ${{ needs.setup.outputs.track }}"
-          echo ""
-          
-          echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
-          echo "CURRENT_VERSION_CODE=$CURRENT_VERSION_CODE" >> $GITHUB_ENV
-          echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
-          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+                                                                                                                                                                                                                                  CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
 
-      - name: Update Android version for build (FAULT TOLERANT)
-        working-directory: ./private-repo/android/app
-        run: |
-          echo "🔄 Updating Android version using fault-tolerant calculation..."
-          echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
-          echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
-          
-          # Update version name
-          sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
-          
-          # Update version code  
-          sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
-          
-          # Verify the changes
-          echo "✅ Updated build.gradle:"
-          echo "$(grep versionName build.gradle)"
-          echo "$(grep "versionCode project.hasProperty" build.gradle)"
+    # Determine the next build number (FAULT TOLERANT!)
+                                                                                                                                                                                                                                  if [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" -gt "$CURRENT_VERSION_CODE" ]; then
+                                                                                                                                                                                                                                  echo "🔄 Google Play Console has newer build ($LATEST_GOOGLE_PLAY_BUILD) than project file ($CURRENT_VERSION_CODE)"
+                                                                                                                                                                                                                                  echo "📋 This prevents conflicts from:"
+                                                                                                                                                                                                                                  echo "   ✅ Draft releases with higher version codes"
+                                                                                                                                                                                                                                  echo "   ✅ Failed builds that left version gaps"
+                                                                                                                                                                                                                                  echo "   ✅ Multi-developer version conflicts"
+                                                                                                                                                                                                                                  echo "   ✅ Track-specific version inconsistencies"
+                                                                                                                                                                                                                                  NEXT_BUILD=$((LATEST_GOOGLE_PLAY_BUILD + 1))
+                                                                                                                                                                                                                                  STRATEGY="Google Play Console + 1"
+                                                                                                                                                                                                                                  else
+                                                                                                                                                                                                                                  echo "✅ Project file is current or newer, incrementing from project file"
+                                                                                                                                                                                                                                  NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
+                                                                                                                                                                                                                                  STRATEGY="Project File + 1"
+                                                                                                                                                                                                                                  fi
+    
+    # Version name increment
+                                                                                                                                                                                                                                  IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
+                                                                                                                                                                                                                                  MAJOR=${VERSION_PARTS[0]}
+                                                                                                                                                                                                                                  MINOR=${VERSION_PARTS[1]}
+                                                                                                                                                                                                                                  PATCH=${VERSION_PARTS[2]}
+                                                                                                                                                                                                                                  NEXT_PATCH=$((PATCH + 1))
+                                                                                                                                                                                                                                  NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
+                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                  echo ""
+                                                                                                                                                                                                                                  echo "📋 Fault-Tolerant Version Resolution:"
+                                                                                                                                                                                                                                  echo "  Current Version: $CURRENT_VERSION_NAME (build $CURRENT_VERSION_CODE)"
+                                                                                                                                                                                                                                  echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
+                                                                                                                                                                                                                                  echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
+                                                                                                                                                                                                                                  echo "  Strategy Used: $STRATEGY"
+                                                                                                                                                                                                                                  echo "  Track Queried: ${{ needs.setup.outputs.track }}"
+                                                                                                                                                                                                                                  echo ""
+                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                  echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
+                                                                                                                                                                                                                                  echo "CURRENT_VERSION_CODE=$CURRENT_VERSION_CODE" >> $GITHUB_ENV
+                                                                                                                                                                                                                                  echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
+                                                                                                                                                                                                                                  echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
 
-      - name: Build Release AAB
-        working-directory: ./private-repo/android
-        run: |
-          ./gradlew bundleRelease \
-            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
-            --stacktrace
+            - name: Update Android version for build (FAULT TOLERANT)
+              working-directory: ./private-repo/android/app
+              run: |
+                echo "🔄 Updating Android version using fault-tolerant calculation..."
+                echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+                echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
+                
+                # Update version name
+                sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
+                
+                # Update version code  
+                sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
+                
+                # Verify the changes
+                echo "✅ Updated build.gradle:"
+                echo "$(grep versionName build.gradle)"
+                echo "$(grep "versionCode project.hasProperty" build.gradle)"
 
-      - name: Upload to Google Play (Attempt 1)
-        id: upload_attempt_1
-        continue-on-error: true
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJson: /tmp/google-play-key.json
-          packageName: com.littletalks.app
-          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ needs.setup.outputs.track }}
-          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+            - name: Build Release AAB
+              working-directory: ./private-repo/android
+              run: |
+                ./gradlew bundleRelease \
+                  -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+                  -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+                  -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+                  -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
+                  --stacktrace
 
-      - name: Retry with incremented build number (Attempt 2)
-        if: steps.upload_attempt_1.outcome == 'failure'
-        working-directory: ./private-repo/android
-        run: |
-          echo "🔄 First upload failed, incrementing build number..."
-          NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
-          echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
-          
-          # Update gradle file
-          sed -i "s/: ${{ env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
-          
-          # Rebuild AAB
-          ./gradlew bundleRelease \
-            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-            -PlittleVersionCode=$NEW_BUILD_NUMBER \
-            --stacktrace
+            - name: Upload to Google Play (Attempt 1)
+              id: upload_attempt_1
+              continue-on-error: true
+              uses: r0adkll/upload-google-play@v1
+              with:
+                serviceAccountJson: /tmp/google-play-key.json
+                packageName: com.littletalks.app
+                releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+                track: ${{ needs.setup.outputs.track }}
+                status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
-      - name: Upload to Google Play (Attempt 2)
-        if: steps.upload_attempt_1.outcome == 'failure'
-        id: upload_attempt_2
-        continue-on-error: true
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJson: /tmp/google-play-key.json
-          packageName: com.littletalks.app
-          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ needs.setup.outputs.track }}
-          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+            - name: Retry with incremented build number (Attempt 2)
+              if: steps.upload_attempt_1.outcome == 'failure'
+              working-directory: ./private-repo/android
+              run: |
+                echo "🔄 First upload failed, incrementing build number..."
+                NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
+                echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
+                
+                # Update gradle file
+                sed -i "s/: ${{ env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
+                
+                # Rebuild AAB
+                ./gradlew bundleRelease \
+                  -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+                  -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+                  -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+                  -PlittleVersionCode=$NEW_BUILD_NUMBER \
+                  --stacktrace
 
-      - name: Retry with incremented build number (Attempt 3)
-        if: steps.upload_attempt_2.outcome == 'failure'
-        working-directory: ./private-repo/android
-        run: |
-          echo "🔄 Second upload failed, incrementing build number again..."
-          NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
-          echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
-          
-          # Update gradle file
-          sed -i "s/: ${{ env.RETRY_VERSION_CODE || env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
-          
-          # Rebuild AAB
-          ./gradlew bundleRelease \
-            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-            -PlittleVersionCode=$NEW_BUILD_NUMBER \
-            --stacktrace
+            - name: Upload to Google Play (Attempt 2)
+              if: steps.upload_attempt_1.outcome == 'failure'
+              id: upload_attempt_2
+              continue-on-error: true
+              uses: r0adkll/upload-google-play@v1
+              with:
+                serviceAccountJson: /tmp/google-play-key.json
+                packageName: com.littletalks.app
+                releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+                track: ${{ needs.setup.outputs.track }}
+                status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
-      - name: Upload to Google Play (Final Attempt)
-        if: steps.upload_attempt_2.outcome == 'failure'
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJson: /tmp/google-play-key.json
-          packageName: com.littletalks.app
-          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ needs.setup.outputs.track }}
-          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+            - name: Retry with incremented build number (Attempt 3)
+              if: steps.upload_attempt_2.outcome == 'failure'
+              working-directory: ./private-repo/android
+              run: |
+                echo "🔄 Second upload failed, incrementing build number again..."
+                NEW_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
+                echo "RETRY_VERSION_CODE=$NEW_BUILD_NUMBER" >> $GITHUB_ENV
+                
+                # Update gradle file
+                sed -i "s/: ${{ env.RETRY_VERSION_CODE || env.NEXT_VERSION_CODE }}/: $NEW_BUILD_NUMBER/" app/build.gradle
+                
+                # Rebuild AAB
+                ./gradlew bundleRelease \
+                  -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+                  -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+                  -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+                  -PlittleVersionCode=$NEW_BUILD_NUMBER \
+                  --stacktrace
 
-      - name: Set Google Play Status
-        run: |
-          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-          if [[ "${{ steps.upload_attempt_1.outcome }}" == "success" ]]; then
-            USED_BUILD_NUMBER=${{ env.NEXT_VERSION_CODE }}
-          elif [[ "${{ steps.upload_attempt_2.outcome }}" == "success" ]]; then
-            USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
-          else
-            USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
-          fi
-          
-          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build $USED_BUILD_NUMBER)" >> $GITHUB_ENV
-          echo "FINAL_VERSION_CODE=$USED_BUILD_NUMBER" >> $GITHUB_ENV
+            - name: Upload to Google Play (Final Attempt)
+              if: steps.upload_attempt_2.outcome == 'failure'
+              uses: r0adkll/upload-google-play@v1
+              with:
+                serviceAccountJson: /tmp/google-play-key.json
+                packageName: com.littletalks.app
+                releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+                track: ${{ needs.setup.outputs.track }}
+                status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+
+            - name: Set Google Play Status
+              run: |
+                echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+                if [[ "${{ steps.upload_attempt_1.outcome }}" == "success" ]]; then
+                  USED_BUILD_NUMBER=${{ env.NEXT_VERSION_CODE }}
+                elif [[ "${{ steps.upload_attempt_2.outcome }}" == "success" ]]; then
+                  USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 1))
+                else
+                  USED_BUILD_NUMBER=$((${{ env.NEXT_VERSION_CODE }} + 2))
+                fi
+                
+                echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build $USED_BUILD_NUMBER)" >> $GITHUB_ENV
+                echo "FINAL_VERSION_CODE=$USED_BUILD_NUMBER" >> $GITHUB_ENV
 
   # Summary
   summary:

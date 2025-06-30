@@ -18,7 +18,7 @@ on:
         description: 'Runner speed (github=free, fast=optimized runners)'
         type: choice
         options: [github, fast]
-        default: 'github'
+        default: 'fast'
 
 jobs:
   setup:

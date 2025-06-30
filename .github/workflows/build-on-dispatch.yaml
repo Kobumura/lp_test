@@ -124,6 +124,7 @@ jobs:
           
           echo ""
           echo "✅ Configuration complete!"
+
   # Unit Tests (Fast fail gate)
   unit-tests:
     runs-on: ${{ needs.setup.outputs.use_buildjet == 'true' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
@@ -163,6 +164,7 @@ jobs:
           echo "🧪 Running unit tests..."
           npm test -- --coverage --watchAll=false
           echo "✅ Unit tests completed!"
+
   # iOS UI Tests
   ios-ui-tests:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
@@ -213,6 +215,7 @@ jobs:
           
           # Create symlink as additional fallback
           sudo ln -sf "$HOME/.maestro/bin/maestro" /usr/local/bin/maestro || true
+
       - name: WarpBuild Xcode & CocoaPods Compatibility
         if: needs.setup.outputs.use_warpbuild == 'true'
         working-directory: ./private-repo
@@ -240,6 +243,7 @@ jobs:
           
           echo "✅ WarpBuild compatibility configuration complete"
           cd ..
+
       - name: Simple Xcode Setup
         if: needs.setup.outputs.use_warpbuild == 'false'
         run: |
@@ -247,6 +251,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           echo "📋 Xcode version:"
           xcodebuild -version
+
       - name: Install CocoaPods Dependencies
         working-directory: ./private-repo/ios
         run: |
@@ -258,6 +263,7 @@ jobs:
             pod install
           fi
           echo "✅ CocoaPods installation complete"
+
       - name: Start Metro Bundler
         working-directory: ./private-repo
         run: |
@@ -284,6 +290,7 @@ jobs:
           
           echo "⏱️ Additional wait for Metro stability..."
           sleep 15
+
       - name: Start iOS Simulator
         run: |
           echo "🍎 Creating iOS Simulator..."
@@ -313,6 +320,7 @@ jobs:
           
           echo "⏱️ Additional wait for simulator stability..."
           sleep 10
+
       - name: Build iOS App for Testing
         working-directory: ./private-repo
         run: |
@@ -326,6 +334,7 @@ jobs:
             -derivedDataPath ./build \
             build
           echo "✅ iOS app built successfully for testing"
+
       - name: Install App on Simulator
         working-directory: ./private-repo
         run: |
@@ -334,12 +343,14 @@ jobs:
           echo "App path: $APP_PATH"  
           xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"  
           echo "✅ App installed on simulator"
+
       - name: Launch App and Wait for Bundle
         run: |
           echo "🚀 Launching LittleTalks app..."
           xcrun simctl launch "$SIMULATOR_ID" com.littletalks.app
           echo "⏱️ Waiting for app installation and initial load..."
           sleep 30
+
       - name: Run Maestro UI Tests
         working-directory: ./private-repo
         run: |
@@ -353,6 +364,7 @@ jobs:
           fi
           
           echo "UI_TEST_SUCCESS=$UI_TEST_SUCCESS" >> $GITHUB_ENV
+
       - name: Set UI Test Results
         id: ui_test_results
         if: always()
@@ -369,6 +381,7 @@ jobs:
             echo "details=iOS Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=false" >> $GITHUB_OUTPUT
           fi
+
       - name: Cleanup UI Tests
         if: always()
         working-directory: ./private-repo
@@ -380,6 +393,7 @@ jobs:
             xcrun simctl shutdown $SIMULATOR_ID 2>/dev/null || true
             xcrun simctl delete $SIMULATOR_ID 2>/dev/null || true
           fi
+
       - name: Upload UI Test Artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -470,6 +484,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
       # Maestro Setup with proper PATH persistence
       - name: Setup Maestro
         run: |
@@ -477,6 +492,7 @@ jobs:
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> $GITHUB_PATH
           $HOME/.maestro/bin/maestro --version
+
       - name: Backup & enhance gradle.properties
         working-directory: ./private-repo
         run: |
@@ -492,6 +508,7 @@ jobs:
           android.enableJetifier=true
           org.gradle.unsafe.configuration-cache=false
           EOF
+
       - name: Cache Gradle Wrapper (buildjet)
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/cache@v3
@@ -514,6 +531,7 @@ jobs:
           key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-caches-
+
       - name: Cache Gradle Dependencies (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/cache@v3
@@ -522,6 +540,7 @@ jobs:
           key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-caches-
+
       - name: Gradle clean
         working-directory: ./private-repo/android
         run: ./gradlew clean
@@ -552,6 +571,7 @@ jobs:
           
           echo "⏱️ Additional wait for Metro stability..."
           sleep 15
+
       # CRITICAL FIX: Build Debug APK (This was missing!)
       - name: Build Debug APK
         working-directory: ./private-repo/android
@@ -567,6 +587,7 @@ jobs:
             echo "❌ APK not found at expected location: $APK_PATH"
             exit 1
           fi
+
       # FIXED: Android Emulator Runner with correct working directory
       - name: Run Android Maestro UI Tests
         uses: reactivecircus/android-emulator-runner@v2
@@ -592,6 +613,7 @@ jobs:
             echo "🧪 Running Maestro UI tests"
             maestro test ".maestro/$TEST_FILE"
             echo "✅ Android UI tests completed successfully"
+
       - name: Set UI Test Results
         id: ui_test_results
         if: always()
@@ -607,6 +629,7 @@ jobs:
             echo "details=Android Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=false" >> $GITHUB_OUTPUT
           fi
+
       - name: Cleanup Android UI Tests
         if: always()
         working-directory: ./private-repo
@@ -614,6 +637,7 @@ jobs:
           if [ -f metro.pid ]; then
             kill $(cat metro.pid) 2>/dev/null || true
           fi
+
       - name: Upload UI Test Artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -656,6 +680,7 @@ jobs:
         run: |
           UI_TESTS_PASSED="${{ needs.ios-ui-tests.outputs.passed }}"
           if [[ "$UI_TESTS_PASSED" != "true" ]]; then exit 1; fi
+
       - name: Checkout Private Repository
         uses: actions/checkout@v4
         with:
@@ -692,6 +717,7 @@ jobs:
             "in_house": false
           }
           EOF
+
       - name: Get latest build number from App Store Connect
         working-directory: ./private-repo/ios
         env:
@@ -703,6 +729,7 @@ jobs:
           LATEST_ASC_BUILD="0"
           fi
           echo "LATEST_ASC_BUILD=$LATEST_ASC_BUILD" >> $GITHUB_ENV
+
       - name: Read and determine next iOS version
         working-directory: ./private-repo
         run: |
@@ -714,18 +741,21 @@ jobs:
           NEXT_VERSION="${V[0]}.${V[1]}.$((V[2]+1))"
           echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+
       - name: Update iOS version for build
         working-directory: ./private-repo
         run: |
           PBX="ios/LittleTalks.xcodeproj/project.pbxproj"
           sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = ${{ env.NEXT_VERSION_NAME }}/" $PBX
           sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${{ env.NEXT_VERSION_CODE }}/" $PBX
+
       - name: Set up Ruby & CocoaPods/Fastlane
         working-directory: ./private-repo
         run: |
           gem install cocoapods fastlane
           cd ios && pod install --clean-install --repo-update
           cd ..
+
       - name: Create Match Keychain & SSH
         run: |
           security create-keychain -p "pass" ios-build.keychain
@@ -738,11 +768,13 @@ jobs:
           fi
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan github.com >> ~/.ssh/known_hosts
+
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
         run: |
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "com.littletalks.app" --team_id "$APPLE_TEAM_ID" --readonly true
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "com.littletalks.app.OneSignalNotificationServiceExt" --team_id "$APPLE_TEAM_ID" --readonly true
+
       - name: Build & Archive
         working-directory: ./private-repo
         run: |
@@ -759,11 +791,13 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist ios/exportOptions.plist \
             -exportPath "$EXPORT_PATH"
+
       - name: Upload to TestFlight
         working-directory: ./private-repo/ios
         run: |
           fastlane ios beta
-  # Android Build & Deploy
+
+  # Android Build & Deploy - WITH BREAKTHROUGH FIXES (NO RETRY LOGIC)
   android-build:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
@@ -771,12 +805,16 @@ jobs:
     if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.android-ui-tests.outputs.passed == 'true' || needs.setup.outputs.fail_fast == 'false')
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
-      GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
-      GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+      # Secrets from dispatch payload or fallback to repo secrets
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_ALIAS || secrets.ANDROID_RELEASE_KEY_ALIAS }}
       ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
     steps:
+      - name: Start Build Timer
+        run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
       - name: Checkout Private Repository
         uses: actions/checkout@v4
         with:
@@ -784,21 +822,23 @@ jobs:
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
           path: ./private-repo
 
-      - name: Setup Java (buildjet)
+      - name: Install Java (buildjet)
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-java@v4
         with:
           java-version: 17
+          cache: gradle
           distribution: adopt
 
-      - name: Setup Java (default)
+      - name: Install Java (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-java@v4
         with:
           java-version: 17
+          cache: gradle
           distribution: adopt
 
-      - name: Setup Node.js (buildjet)
+      - name: Setup Node (buildjet)
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
@@ -806,7 +846,7 @@ jobs:
           cache: 'yarn'
           cache-dependency-path: './private-repo/yarn.lock'
 
-      - name: Setup Node.js (default)
+      - name: Setup Node (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
@@ -814,47 +854,180 @@ jobs:
           cache: 'yarn'
           cache-dependency-path: './private-repo/yarn.lock'
 
-      - name: Install Dependencies
+      - name: Install Modules
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      - name: Decode Google Play Credentials
+      - name: Cache Gradle (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/cache@v3
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      # ✅ FIX 1: Install Codemagic CLI Tools with BuildJet compatibility
+      - name: Install Codemagic CLI Tools (BuildJet Compatible)
         run: |
-          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
-            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          echo "📦 Installing Codemagic CLI tools..."
+          
+          if [ "${{ needs.setup.outputs.use_buildjet }}" = "true" ]; then
+            echo "🔧 Applying BuildJet dependency fixes..."
+            pip install --upgrade pip setuptools wheel
+            pip install --upgrade 'cryptography>=3.4.8'
+            pip install --force-reinstall 'pyOpenSSL>=22.0.0'
           else
-            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
+            echo "🏃‍♂️ Using GitHub runners - clean environment, no fixes needed"
           fi
+          
+          pip install codemagic-cli-tools
+          echo "✅ Codemagic CLI tools installed"
+          
+          # Verify installation works
+          echo "🔧 Verifying Codemagic CLI installation:"
+          google-play --version || echo "❌ CLI command failed"
+
+      # ✅ FIX 2: Prepare Google Play Credentials (BEFORE the query)
+      - name: Prepare Google Play Credentials
+        env:
+          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+        run: |
+          echo "🔑 Setting up Google Play credentials..."
+          
+          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
+            echo "🔑 Using Google Play JSON from repository dispatch (base64)"
+            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
+            echo "🔑 Using Google Play JSON from repository secrets (direct)"
+            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+          
+          # Verify the JSON file is valid
+          echo "🔍 Validating JSON file..."
+          if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
+            echo "✅ JSON file is valid"
+          else
+            echo "❌ JSON file is invalid"
+            exit 1
+          fi
+
+      # ✅ FIX 3: Enhanced Google Play Console query with verbose debugging
       - name: Get latest build number from Google Play Console
         run: |
-          LATEST_GP=$(google-play get-latest-build-number \
-            --package-name "com.littletalks.app" \
-            --tracks "${{ needs.setup.outputs.track }}" \
-            --credentials /tmp/google-play-key.json 2>/dev/null || echo 0)
-          echo "LATEST_GOOGLE_PLAY_BUILD=$LATEST_GP" >> $GITHUB_ENV
+          echo "🔍 Querying Google Play Console for latest build number..."
+          echo "📋 Runner type: ${{ needs.setup.outputs.android_runner }}"
+          
+          QUERY_TRACK="${{ needs.setup.outputs.track }}"
+          echo "📋 Querying track: $QUERY_TRACK"
+          
+          # Try with verbose flag for debugging
+          echo "🧪 Attempting Google Play Console query..."
+          if VERBOSE_RESULT=$(google-play get-latest-build-number \
+              --package-name "com.littletalks.app" \
+              --tracks "$QUERY_TRACK" \
+              --credentials "@file:/tmp/google-play-key.json" \
+              --verbose 2>&1); then
+          
+            echo "✅ Query succeeded:"
+            echo "$VERBOSE_RESULT"
+          
+            # Parse the successful result
+            PARSED_BUILD=$(echo "$VERBOSE_RESULT" | grep -o '[0-9]\+$' | tail -1)
+            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
+              LATEST_GOOGLE_PLAY_BUILD="$PARSED_BUILD"
+            else
+              LATEST_GOOGLE_PLAY_BUILD="0"
+            fi
+          else
+            echo "❌ Query failed:"
+            echo "$VERBOSE_RESULT"
+            LATEST_GOOGLE_PLAY_BUILD="0"
+          fi
+          
+          echo "📋 Final result: LATEST_GOOGLE_PLAY_BUILD=$LATEST_GOOGLE_PLAY_BUILD"
+          echo "LATEST_GOOGLE_PLAY_BUILD=$LATEST_GOOGLE_PLAY_BUILD" >> $GITHUB_ENV
+
+      # ✅ FIX 4: Upload debug artifacts
+      - name: Upload Debug Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-play-debug-logs
+          path: |
+            /tmp/*codemagic*.log
+            /tmp/google-play-key.json
+          retention-days: 1
+          if-no-files-found: ignore
+
+      # ✅ FAULT-TOLERANT VERSION RESOLUTION (Same as before)
       - name: Read and determine next Android version (FAULT TOLERANT)
         working-directory: ./private-repo/android/app
         run: |
           CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
           CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
-          if [ "$LATEST_GOOGLE_PLAY_BUILD" -gt "$CURRENT_VERSION_CODE" ]; then
+
+          # Determine the next build number (FAULT TOLERANT!)
+          if [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" -gt "$CURRENT_VERSION_CODE" ]; then
+            echo "🔄 Google Play Console has newer build ($LATEST_GOOGLE_PLAY_BUILD) than project file ($CURRENT_VERSION_CODE)"
             NEXT_BUILD=$((LATEST_GOOGLE_PLAY_BUILD + 1))
             STRATEGY="Google Play Console + 1"
           else
+            echo "✅ Project file is current or newer, incrementing from project file"
             NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
             STRATEGY="Project File + 1"
           fi
-          IFS='.' read -ra PARTS <<< "$CURRENT_VERSION_NAME"
-          NEXT_VERSION_NAME="${PARTS[0]}.${PARTS[1]}.$((PARTS[2]+1))"
+
+          # Version name increment
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
+          
+          echo "📋 Fault-Tolerant Version Resolution:"
+          echo "  Current Version: $CURRENT_VERSION_NAME (build $CURRENT_VERSION_CODE)"
+          echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
+          echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
+          echo "  Strategy Used: $STRATEGY"
+          
           echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
           echo "CURRENT_VERSION_CODE=$CURRENT_VERSION_CODE" >> $GITHUB_ENV
           echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+
       - name: Update Android version for build (FAULT TOLERANT)
         working-directory: ./private-repo/android/app
         run: |
+          echo "🔄 Updating Android version using fault-tolerant calculation..."
+          echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+          echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
+          
+          # Update version name
           sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
+          
+          # Update version code  
           sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
+          
+          # Verify the changes
+          echo "✅ Updated build.gradle:"
+          echo "$(grep versionName build.gradle)"
+          echo "$(grep "versionCode project.hasProperty" build.gradle)"
+
       - name: Build Release AAB
         working-directory: ./private-repo/android
         run: |
@@ -864,14 +1037,30 @@ jobs:
             -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
             -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
             --stacktrace
+
+      # ✅ SIMPLE UPLOAD (No retry logic)
       - name: Upload to Google Play
         uses: r0adkll/upload-google-play@v1
         with:
-          serviceAccountJsonPlainText: ${{ env.GOOGLE_PLAY_JSON_REPO }}
+          serviceAccountJson: /tmp/google-play-key.json
           packageName: com.littletalks.app
           releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ needs.setup.outputs.track }}
           status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+
+      - name: Set Google Play Status
+        run: |
+          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
+
+      - name: Commit version bump to private repo
+        working-directory: ./private-repo
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/build.gradle
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
+          git push
 
   # Summary
   summary:

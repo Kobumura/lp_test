@@ -1216,24 +1216,9 @@ jobs:
 
       - name: Install Codemagic CLI Tools
         run: |
-            echo "📦 Installing Codemagic CLI tools..."
-            pip install codemagic-cli-tools
-            echo "✅ Codemagic CLI tools installed"
-          
-      - name: Prepare Google Play Credentials
-        run: |
-          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/google-play-key.json
-          elif [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" ]; then
-            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_REPO" > /tmp/google-play-key.json
-          else
-            echo "❌ No Google Play service account JSON available"
-            exit 1
-          fi
-          
-          # Set up environment variable for Codemagic CLI
-          export GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS=$(cat /tmp/google-play-key.json)
-          echo "GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS=$GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS" >> $GITHUB_ENV
+          echo "📦 Installing Codemagic CLI tools..."
+          pip install codemagic-cli-tools
+          echo "✅ Codemagic CLI tools installed"
 
       - name: Get latest build number from Google Play Console (FAULT TOLERANT)
         run: |
@@ -1243,11 +1228,11 @@ jobs:
           QUERY_TRACK="${{ needs.setup.outputs.track }}"
           echo "📋 Querying track: $QUERY_TRACK"
           
-          # Use Codemagic CLI to get latest build number
+          # Use Codemagic CLI to get latest build number (using file credentials)
           if LATEST_GOOGLE_PLAY_BUILD=$(google-play get-latest-build-number \
               --package-name "com.littletalks.app" \
               --tracks "$QUERY_TRACK" \
-              --credentials "$GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS" 2>/dev/null); then
+              --credentials "@file:/tmp/google-play-key.json" 2>/dev/null); then
           
             echo "📱 Latest build number on Google Play track '$QUERY_TRACK': $LATEST_GOOGLE_PLAY_BUILD"
           

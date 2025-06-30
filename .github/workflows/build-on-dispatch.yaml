@@ -1214,11 +1214,31 @@ jobs:
             ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-      - name: Install Codemagic CLI Tools
+
+      - name: Install Codemagic CLI Tools (BuildJet Compatible)
         run: |
           echo "📦 Installing Codemagic CLI tools..."
+
+          if [ "${{ needs.setup.outputs.use_buildjet }}" = "true" ]; then
+            echo "🔧 Applying BuildJet dependency fixes..."
+            pip install --upgrade pip setuptools wheel
+
+            # Fix OpenSSL/cryptography conflicts on BuildJet
+            pip install --upgrade 'cryptography>=3.4.8'
+            pip install --force-reinstall 'pyOpenSSL>=22.0.0'
+          else
+            echo "🏃‍♂️ Using GitHub runners - clean environment, no fixes needed"
+          fi
+
+          # Install Codemagic CLI (works on both environments after fixes)
           pip install codemagic-cli-tools
+
           echo "✅ Codemagic CLI tools installed"
+
+          # Verify installation works
+          echo "🔧 Verifying Codemagic CLI installation:"
+          python3 -c "from codemagic.tools import GooglePlay; print('✅ GooglePlay import successful')" || echo "❌ Import failed"
+          google-play --version || echo "❌ CLI command failed"
 
       # ✅ FIXED: Use exact same credential pattern as debug workflow
       - name: Prepare Google Play Credentials

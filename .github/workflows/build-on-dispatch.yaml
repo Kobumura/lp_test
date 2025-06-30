@@ -415,7 +415,7 @@ jobs:
     timeout-minutes: 40
     needs: [setup, unit-tests]
     #if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && (success() || needs.setup.outputs.fail_fast == 'false')
-    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.android-ui-tests.outputs.ui_tests_passed == 'true' || needs.setup.outputs.fail_fast == 'false')
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.android-ui-tests.result == 'success' || needs.setup.outputs.fail_fast == 'false')
 
     outputs:
       ui_test_status: ${{ steps.ui_test_results.outputs.status }}

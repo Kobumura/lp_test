@@ -920,14 +920,14 @@ jobs:
           echo "📦 Installing Codemagic CLI tools..."
           
           if [ "${{ needs.setup.outputs.use_buildjet }}" = "true" ]; then
-            echo "🔧 Aggressive BuildJet cryptography fix..."
+            echo "🔧 BuildJet cryptography compatibility fix..."
           
             # Completely remove conflicting packages
             pip uninstall -y pyOpenSSL cryptography || true
           
-            # Install known compatible versions
-            pip install 'cryptography==3.4.8'
-            pip install 'pyOpenSSL==20.0.1'
+            # Install recent stable versions that work together
+            pip install 'cryptography==37.0.4'
+            pip install 'pyOpenSSL==22.0.0'
           
             # Verify the fix worked
             echo "🧪 Testing cryptography compatibility..."

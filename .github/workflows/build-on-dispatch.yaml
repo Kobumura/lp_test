@@ -802,7 +802,7 @@ jobs:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
     needs: [setup, android-ui-tests]
-    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.android-ui-tests.outputs.passed == 'true' || needs.setup.outputs.fail_fast == 'false')
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.android-ui-tests.outputs.ui_tests_passed == 'true' || needs.setup.outputs.fail_fast == 'false')
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
       # Secrets from dispatch payload or fallback to repo secrets

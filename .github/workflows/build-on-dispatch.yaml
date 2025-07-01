@@ -798,7 +798,7 @@ jobs:
           fastlane ios beta
 
     # Android Build & Deploy - WITH BREAKTHROUGH FIXES (NO RETRY LOGIC)
-    android-build:
+  android-build:
       runs-on: ${{ needs.setup.outputs.android_runner }}
       timeout-minutes: 30
       needs: [setup, android-ui-tests]

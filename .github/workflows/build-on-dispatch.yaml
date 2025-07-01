@@ -58,7 +58,7 @@ jobs:
             RUN_BUILD="${{ github.event.client_payload.run_build || 'true' }}"
             TRACK="${{ github.event.client_payload.track || 'internal' }}"
             FAIL_FAST="${{ github.event.client_payload.fail_fast || 'true' }}"
-            DEV_MODE="${{ github.event.client_payload.dev_mode || 'true' }}"
+            DEV_MODE="${{ github.event.client_payload.dev_mode || 'false' }}"
           else
             TARGET_REPO="${{ inputs.target_repo }}"
             PLATFORM="${{ inputs.platform }}"
@@ -68,7 +68,7 @@ jobs:
             RUN_BUILD="true"
             TRACK="internal"
             FAIL_FAST="true"
-            DEV_MODE="${{ inputs.dev_mode || 'true' }}"
+            DEV_MODE="${{ inputs.dev_mode || 'false' }}"
           fi
           
           # 🔧 DEVELOPMENT MODE PROCESSING
@@ -945,8 +945,8 @@ jobs:
             echo "🏃‍♂️ Using GitHub runners - clean environment, no fixes needed"
           fi
           
-          # Install Codemagic CLI
-          pip install codemagic-cli-tools
+          # Install Codemagic CLI with extended timeout
+          pip install --default-timeout=100 codemagic-cli-tools
           echo "✅ Codemagic CLI tools installed"
           
           # Verify installation works

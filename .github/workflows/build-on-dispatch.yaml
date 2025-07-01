@@ -1128,3 +1128,134 @@ jobs:
           echo "Google Play Query: ${{ needs.google-play-query.outputs.query_success }} (build ${{ needs.google-play-query.outputs.latest_build_number }})"
           echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
           echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
+
+      - name: Slack Notify
+        description: Sends a Slack message with CI/CD details
+        inputs:
+          status:
+            description: 'Build status (success, failure, etc.)'
+            required: true
+          start:
+            description: 'Build start timestamp'
+            required: true
+          end:
+            description: 'Build end timestamp'
+            required: true
+          passed:
+            description: 'Number of tests passed'
+            required: true
+          failed:
+            description: 'Number of tests failed'
+            required: true
+          total:
+            description: 'Total number of tests'
+            required: true
+          version:
+            description: 'App version'
+            required: true
+          build_no:
+            description: 'Build number'
+            required: true
+          track:
+            description: 'Deployment track'
+            required: true
+          store_status:
+            description: 'App store upload status'
+            required: false
+            default: 'N/A'
+          coverage:
+            description: 'Test coverage percentage'
+            required: false
+            default: 'N/A'
+          ui_test_status:
+            description: 'UI test execution status'
+            required: false
+            default: '⏭️ UI Tests Skipped'
+          ui_test_details:
+            description: 'UI test execution details'
+            required: false
+            default: 'No UI testing performed'
+        runs:
+          using: "composite"
+          steps:
+            - name: Format and Send Slack Message
+              shell: bash
+              env:
+                SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+              run: |
+                DURATION=$(( ${{ inputs.end }} - ${{ inputs.start }} ))
+                HOURS=$((DURATION / 3600))
+                MINUTES=$(( (DURATION % 3600) / 60 ))
+                SECONDS=$((DURATION % 60))
+                printf -v DURATION_FMT "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
+                COLOR="#2eb886"
+                [ "${{ inputs.status }}" != "success" ] && COLOR="#e01e5a"
+                URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                BRANCH="${GITHUB_REF#refs/heads/}"
+                ACTOR="${{ github.actor }}"
+                TEST_SUMMARY="✅ ${{ inputs.passed }} passed / ❌ ${{ inputs.failed }} failed / 📊 ${{ inputs.total }} total"
+                
+                # Generate visual coverage representation
+                COVERAGE_INPUT="${{ inputs.coverage }}"
+                COVERAGE_NUM=$(echo "$COVERAGE_INPUT" | sed 's/%//')
+                
+                # Check if coverage is a valid number (integer or decimal)
+                if [[ "$COVERAGE_NUM" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                  # Convert to integer for progress bar calculation (round down)
+                  COVERAGE_INT=${COVERAGE_NUM%.*}
+                
+                  # Progress bar (10 segments, each representing 10%)
+                  BARS=$((COVERAGE_INT / 10))
+                  EMPTY=$((10 - BARS))
+                  PROGRESS_BAR=$(printf '🟩%.0s' $(seq 1 $BARS))$(printf '⬜%.0s' $(seq 1 $EMPTY))
+                
+                  # Color coding based on coverage level
+                  if (( $(echo "$COVERAGE_NUM >= 90" | bc -l) )); then
+                    COVERAGE_EMOJI="🎯"
+                  elif (( $(echo "$COVERAGE_NUM >= 80" | bc -l) )); then
+                    COVERAGE_EMOJI="✅"
+                  elif (( $(echo "$COVERAGE_NUM >= 70" | bc -l) )); then
+                    COVERAGE_EMOJI="⚠️"
+                  else
+                    COVERAGE_EMOJI="🚨"
+                  fi
+                
+                  COVERAGE_VISUAL="$COVERAGE_EMOJI $PROGRESS_BAR $COVERAGE_INPUT"
+                else
+                  COVERAGE_VISUAL="❓ $COVERAGE_INPUT"
+                fi
+        
+                # Format UI test status for display
+                UI_TEST_DISPLAY="${{ inputs.ui_test_status }}"
+                if [[ "${{ inputs.ui_test_details }}" != "No UI testing performed" ]]; then
+                  UI_TEST_DISPLAY="$UI_TEST_DISPLAY\n_${{ inputs.ui_test_details }}_"
+                fi
+                
+                if [ -n "$SLACK_WEBHOOK_URL" ]; then
+                  curl -X POST -H 'Content-type: application/json' --data "{
+                    \"attachments\": [
+                      {
+                        \"fallback\": \"Build ${{ inputs.status }}: ${{ inputs.version }} (build ${{ inputs.build_no }}, ${{ inputs.track }})\",
+                        \"color\": \"$COLOR\",
+                        \"title\": \"CI/CD: ${{ inputs.status }}\",
+                        \"title_link\": \"$URL\",
+                        \"fields\": [
+                          { \"title\": \"Version\", \"value\": \"${{ inputs.version }}\", \"short\": true },
+                          { \"title\": \"Build #\", \"value\": \"${{ inputs.build_no }}\", \"short\": true },
+                          { \"title\": \"Track\", \"value\": \"${{ inputs.track }}\", \"short\": true },
+                          { \"title\": \"Branch\", \"value\": \"$BRANCH\", \"short\": true },
+                          { \"title\": \"Triggered by\", \"value\": \"$ACTOR\", \"short\": true },
+                          { \"title\": \"Duration\", \"value\": \"$DURATION_FMT\", \"short\": true },
+                          { \"title\": \"Tests\", \"value\": \"$TEST_SUMMARY\", \"short\": false },
+                          { \"title\": \"Coverage\", \"value\": \"$COVERAGE_VISUAL\", \"short\": false },
+                          { \"title\": \"UI Tests\", \"value\": \"$UI_TEST_DISPLAY\", \"short\": false },
+                          { \"title\": \"App Store Status\", \"value\": \"${{ inputs.store_status }}\", \"short\": false }
+                        ],
+                        \"footer\": \"GitHub Actions\",
+                        \"ts\": $(date +%s)
+                      }
+                    ]
+                  }" "$SLACK_WEBHOOK_URL"
+                else
+                  echo "SLACK_WEBHOOK_URL not set, skipping Slack notification"
+                fi

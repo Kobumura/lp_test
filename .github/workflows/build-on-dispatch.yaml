@@ -23,7 +23,7 @@ on:
       dev_mode:
         description: '🔧 Dev Mode: Skip tests for pipeline development'
         type: boolean
-        default: false
+        default: true
 
 jobs:
   setup:

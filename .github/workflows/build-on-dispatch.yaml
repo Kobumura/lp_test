@@ -1220,7 +1220,7 @@ jobs:
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
   # Android UI Tests - SKIPPED IN DEV MODE
-  android-ui-tests:
+android-ui-tests:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 40
     needs: [setup, unit-tests]

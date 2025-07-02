@@ -1,130 +1,260 @@
-name: Slack Notify
-description: Sends a Slack message with CI/CD details
+name: 'LittlePipes Slack Notify'
+description: 'Send rich Slack notifications for LittlePipes build results'
 inputs:
+  webhook_url:
+    description: 'Slack webhook URL'
+    required: true
   status:
-    description: 'Build status (success, failure, etc.)'
+    description: 'Overall build status (success/failure)'
     required: true
-  start:
-    description: 'Build start timestamp'
+  duration:
+    description: 'Build duration in seconds'
     required: true
-  end:
-    description: 'Build end timestamp'
+  duration_formatted:
+    description: 'Formatted duration (MM:SS)'
     required: true
-  passed:
-    description: 'Number of tests passed'
+  platform:
+    description: 'Platform built (ios/android/both)'
     required: true
-  failed:
-    description: 'Number of tests failed'
-    required: true
-  total:
-    description: 'Total number of tests'
-    required: true
-  version:
-    description: 'App version'
-    required: true
-  build_no:
-    description: 'Build number'
-    required: true
-  track:
-    description: 'Deployment track'
-    required: true
-  store_status:
-    description: 'App store upload status'
+  dev_mode:
+    description: 'Whether dev mode was enabled'
     required: false
-    default: 'N/A'
-  coverage:
-    description: 'Test coverage percentage'
+    default: 'false'
+  target_repo:
+    description: 'Target repository name'
+    required: true
+  trigger_actor:
+    description: 'User who triggered the build'
+    required: true
+  # Test results
+  unit_tests_result:
+    description: 'Unit tests result'
     required: false
-    default: 'N/A'
-  ui_test_status:
-    description: 'UI test execution status'
+    default: 'skipped'
+  ios_ui_tests_result:
+    description: 'iOS UI tests result'
     required: false
-    default: '⏭️ UI Tests Skipped'
-  ui_test_details:
-    description: 'UI test execution details'
+    default: 'skipped'
+  android_ui_tests_result:
+    description: 'Android UI tests result'
     required: false
-    default: 'No UI testing performed'
+    default: 'skipped'
+  # Build results
+  ios_build_result:
+    description: 'iOS build result'
+    required: false
+    default: 'skipped'
+  android_build_result:
+    description: 'Android build result'
+    required: false
+    default: 'skipped'
+  google_play_query_result:
+    description: 'Google Play query result'
+    required: false
+    default: 'skipped'
+  google_play_build_number:
+    description: 'Latest build number from Google Play'
+    required: false
+    default: '0'
+
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
-    - name: Format and Send Slack Message
+    - name: Validate Inputs
       shell: bash
-      env:
-        SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
       run: |
-        DURATION=$(( ${{ inputs.end }} - ${{ inputs.start }} ))
-        HOURS=$((DURATION / 3600))
-        MINUTES=$(( (DURATION % 3600) / 60 ))
-        SECONDS=$((DURATION % 60))
-        printf -v DURATION_FMT "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
-        COLOR="#2eb886"
-        [ "${{ inputs.status }}" != "success" ] && COLOR="#e01e5a"
-        URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        BRANCH="${GITHUB_REF#refs/heads/}"
-        ACTOR="${{ github.actor }}"
-        TEST_SUMMARY="✅ ${{ inputs.passed }} passed / ❌ ${{ inputs.failed }} failed / 📊 ${{ inputs.total }} total"
+        echo "🔔 Slack Notify Action Starting"
+        echo "Webhook URL: ${{ inputs.webhook_url != '' && 'PRESENT' || 'MISSING' }}"
+        echo "Status: ${{ inputs.status }}"
+        echo "Duration: ${{ inputs.duration }}s (${{ inputs.duration_formatted }})"
+        echo "Platform: ${{ inputs.platform }}"
+        echo "Target: ${{ inputs.target_repo }}"
+        echo "Actor: ${{ inputs.trigger_actor }}"
+        echo "Dev Mode: ${{ inputs.dev_mode }}"
+
+    - name: Prepare Slack Message
+      shell: bash
+      run: |
+        # Set status emoji and color
+        if [[ "${{ inputs.status }}" == "success" ]]; then
+          STATUS_EMOJI="✅"
+          STATUS_COLOR="good"
+          STATUS_TEXT="SUCCESS"
+        else
+          STATUS_EMOJI="❌"
+          STATUS_COLOR="danger"  
+          STATUS_TEXT="FAILURE"
+        fi
         
-        # Generate visual coverage representation
-        COVERAGE_INPUT="${{ inputs.coverage }}"
-        COVERAGE_NUM=$(echo "$COVERAGE_INPUT" | sed 's/%//')
+        # Platform emoji
+        case "${{ inputs.platform }}" in
+          "ios") PLATFORM_EMOJI="🍎" ;;
+          "android") PLATFORM_EMOJI="🤖" ;;
+          "both") PLATFORM_EMOJI="🍎🤖" ;;
+          *) PLATFORM_EMOJI="📱" ;;
+        esac
         
-        # Check if coverage is a valid number (integer or decimal)
-        if [[ "$COVERAGE_NUM" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-          # Convert to integer for progress bar calculation (round down)
-          COVERAGE_INT=${COVERAGE_NUM%.*}
+        # Dev mode indicator
+        DEV_MODE_TEXT=""
+        if [[ "${{ inputs.dev_mode }}" == "true" ]]; then
+          DEV_MODE_TEXT=" 🔧 DEV MODE"
+        fi
         
-          # Progress bar (10 segments, each representing 10%)
-          BARS=$((COVERAGE_INT / 10))
-          EMPTY=$((10 - BARS))
-          PROGRESS_BAR=$(printf '🟩%.0s' $(seq 1 $BARS))$(printf '⬜%.0s' $(seq 1 $EMPTY))
-        
-          # Color coding based on coverage level
-          if (( $(echo "$COVERAGE_NUM >= 90" | bc -l) )); then
-            COVERAGE_EMOJI="🎯"
-          elif (( $(echo "$COVERAGE_NUM >= 80" | bc -l) )); then
-            COVERAGE_EMOJI="✅"
-          elif (( $(echo "$COVERAGE_NUM >= 70" | bc -l) )); then
-            COVERAGE_EMOJI="⚠️"
-          else
-            COVERAGE_EMOJI="🚨"
+        # Create test results summary
+        TEST_SUMMARY=""
+        if [[ "${{ inputs.dev_mode }}" == "true" ]]; then
+          TEST_SUMMARY="Tests skipped in dev mode"
+        else
+          TESTS=()
+          if [[ "${{ inputs.unit_tests_result }}" != "skipped" ]]; then
+            if [[ "${{ inputs.unit_tests_result }}" == "success" ]]; then
+              TESTS+=("Unit ✅")
+            else
+              TESTS+=("Unit ❌")
+            fi
+          fi
+          if [[ "${{ inputs.ios_ui_tests_result }}" != "skipped" ]]; then
+            if [[ "${{ inputs.ios_ui_tests_result }}" == "success" ]]; then
+              TESTS+=("iOS UI ✅")
+            else
+              TESTS+=("iOS UI ❌")
+            fi
+          fi
+          if [[ "${{ inputs.android_ui_tests_result }}" != "skipped" ]]; then
+            if [[ "${{ inputs.android_ui_tests_result }}" == "success" ]]; then
+              TESTS+=("Android UI ✅")
+            else
+              TESTS+=("Android UI ❌")
+            fi
           fi
         
-          COVERAGE_VISUAL="$COVERAGE_EMOJI $PROGRESS_BAR $COVERAGE_INPUT"
-        else
-          COVERAGE_VISUAL="❓ $COVERAGE_INPUT"
-        fi
-
-        # Format UI test status for display
-        UI_TEST_DISPLAY="${{ inputs.ui_test_status }}"
-        if [[ "${{ inputs.ui_test_details }}" != "No UI testing performed" ]]; then
-          UI_TEST_DISPLAY="$UI_TEST_DISPLAY\n_${{ inputs.ui_test_details }}_"
+          if [ ${#TESTS[@]} -eq 0 ]; then
+            TEST_SUMMARY="No tests ran"
+          else
+            TEST_SUMMARY=$(IFS=", "; echo "${TESTS[*]}")
+          fi
         fi
         
-        if [ -n "$SLACK_WEBHOOK_URL" ]; then
-          curl -X POST -H 'Content-type: application/json' --data "{
-            \"attachments\": [
-              {
-                \"fallback\": \"Build ${{ inputs.status }}: ${{ inputs.version }} (build ${{ inputs.build_no }}, ${{ inputs.track }})\",
-                \"color\": \"$COLOR\",
-                \"title\": \"CI/CD: ${{ inputs.status }}\",
-                \"title_link\": \"$URL\",
-                \"fields\": [
-                  { \"title\": \"Version\", \"value\": \"${{ inputs.version }}\", \"short\": true },
-                  { \"title\": \"Build #\", \"value\": \"${{ inputs.build_no }}\", \"short\": true },
-                  { \"title\": \"Track\", \"value\": \"${{ inputs.track }}\", \"short\": true },
-                  { \"title\": \"Branch\", \"value\": \"$BRANCH\", \"short\": true },
-                  { \"title\": \"Triggered by\", \"value\": \"$ACTOR\", \"short\": true },
-                  { \"title\": \"Duration\", \"value\": \"$DURATION_FMT\", \"short\": true },
-                  { \"title\": \"Tests\", \"value\": \"$TEST_SUMMARY\", \"short\": false },
-                  { \"title\": \"Coverage\", \"value\": \"$COVERAGE_VISUAL\", \"short\": false },
-                  { \"title\": \"UI Tests\", \"value\": \"$UI_TEST_DISPLAY\", \"short\": false },
-                  { \"title\": \"App Store Status\", \"value\": \"${{ inputs.store_status }}\", \"short\": false }
-                ],
-                \"footer\": \"GitHub Actions\",
-                \"ts\": $(date +%s)
-              }
-            ]
-          }" "$SLACK_WEBHOOK_URL"
+        # Create build results summary
+        BUILD_SUMMARY=""
+        BUILDS=()
+        if [[ "${{ inputs.ios_build_result }}" != "skipped" ]]; then
+          if [[ "${{ inputs.ios_build_result }}" == "success" ]]; then
+            BUILDS+=("iOS ✅")
+          else
+            BUILDS+=("iOS ❌")
+          fi
+        fi
+        if [[ "${{ inputs.android_build_result }}" != "skipped" ]]; then
+          if [[ "${{ inputs.android_build_result }}" == "success" ]]; then
+            BUILDS+=("Android ✅")
+          else
+            BUILDS+=("Android ❌")
+          fi
+        fi
+        
+        if [ ${#BUILDS[@]} -eq 0 ]; then
+          BUILD_SUMMARY="No builds ran"
         else
-          echo "SLACK_WEBHOOK_URL not set, skipping Slack notification"
+          BUILD_SUMMARY=$(IFS=", "; echo "${BUILDS[*]}")
+        fi
+        
+        # Google Play info
+        GOOGLE_PLAY_INFO=""
+        if [[ "${{ inputs.google_play_query_result }}" == "success" ]] && [[ "${{ inputs.google_play_build_number }}" != "0" ]]; then
+          GOOGLE_PLAY_INFO=" | Build #${{ inputs.google_play_build_number }}"
+        fi
+        
+        # Save all variables to environment for next step
+        echo "STATUS_EMOJI=$STATUS_EMOJI" >> $GITHUB_ENV
+        echo "STATUS_COLOR=$STATUS_COLOR" >> $GITHUB_ENV
+        echo "STATUS_TEXT=$STATUS_TEXT" >> $GITHUB_ENV
+        echo "PLATFORM_EMOJI=$PLATFORM_EMOJI" >> $GITHUB_ENV
+        echo "DEV_MODE_TEXT=$DEV_MODE_TEXT" >> $GITHUB_ENV
+        echo "TEST_SUMMARY=$TEST_SUMMARY" >> $GITHUB_ENV
+        echo "BUILD_SUMMARY=$BUILD_SUMMARY" >> $GITHUB_ENV
+        echo "GOOGLE_PLAY_INFO=$GOOGLE_PLAY_INFO" >> $GITHUB_ENV
+
+    - name: Send Slack Notification
+      shell: bash
+      run: |
+        if [[ -z "${{ inputs.webhook_url }}" ]]; then
+          echo "⚠️ SLACK_WEBHOOK_URL not set, skipping Slack notification"
+          exit 0
+        fi
+        
+        # Create the Slack payload
+        PAYLOAD=$(cat <<EOF
+        {
+          "attachments": [
+            {
+              "color": "$STATUS_COLOR",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "$STATUS_EMOJI LittlePipes Build $STATUS_TEXT$DEV_MODE_TEXT"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ inputs.target_repo }}"
+                    },
+                    {
+                      "type": "mrkdwn", 
+                      "text": "*Platform:*\n$PLATFORM_EMOJI ${{ inputs.platform }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Duration:*\n⏱️ ${{ inputs.duration_formatted }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n👤 ${{ inputs.trigger_actor }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Tests:* $TEST_SUMMARY\n*Builds:* $BUILD_SUMMARY$GOOGLE_PLAY_INFO"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "🚀 <https://github.com/${{ github.repository }}/actions|View Workflow> | <https://github.com/${{ inputs.target_repo }}|Repository>"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+        )
+        
+        # Send to Slack
+        echo "📤 Sending Slack notification..."
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          -H "Content-type: application/json" \
+          --data "$PAYLOAD" \
+          "${{ inputs.webhook_url }}")
+        
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+        
+        if [[ "$HTTP_CODE" -eq 200 ]]; then
+          echo "✅ Slack notification sent successfully"
+        else
+          echo "❌ Slack notification failed with HTTP $HTTP_CODE"
+          echo "Response: $RESPONSE_BODY"
+          exit 1
         fi

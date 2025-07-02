@@ -905,6 +905,26 @@ jobs:
         run: |
           fastlane ios beta
 
+      # ✅ NEW: Commit iOS version bump to private repo
+      - name: Commit iOS version bump to private repo
+        working-directory: ./private-repo
+        run: |
+          echo "📝 Committing iOS version bump..."
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Add the modified project file
+          git add ios/LittleTalks.xcodeproj/project.pbxproj
+          
+          # Commit if there are changes
+          if git diff --staged --quiet; then
+            echo "✅ No iOS version changes to commit"
+          else
+            git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]"
+            git push
+            echo "✅ iOS version bump committed and pushed"
+          fi
+
   # Android Build & Deploy - WORKS IN BOTH NORMAL AND DEV MODE
   android-build:
     runs-on: ${{ needs.setup.outputs.android_runner }}
@@ -1000,25 +1020,26 @@ jobs:
             ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-      # ✅ FAULT-TOLERANT VERSION RESOLUTION (Same as before)
-      - name: Read and determine next Android version (FAULT TOLERANT)
+      # ✅ STORE-FIRST VERSION MANAGEMENT (Fixes +61 increment bug)
+      - name: Read and determine next Android version (STORE-FIRST APPROACH)
         working-directory: ./private-repo/android/app
         run: |
+          # Read project file versions for display only
           CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
-          CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
           
-          # Determine the next build number (FAULT TOLERANT!)
-          if [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" -gt "$CURRENT_VERSION_CODE" ]; then
-            echo "🔄 Google Play Console has newer build ($LATEST_GOOGLE_PLAY_BUILD) than project file ($CURRENT_VERSION_CODE)"
+          # Always use Google Play Console as source of truth for version code
+          if [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ] && [ "${{ needs.google-play-query.outputs.query_success }}" = "true" ]; then
             NEXT_BUILD=$((LATEST_GOOGLE_PLAY_BUILD + 1))
-            STRATEGY="Google Play Console + 1"
+            STRATEGY="Google Play Console + 1 (store-first)"
+            echo "✅ Using Google Play Console version $LATEST_GOOGLE_PLAY_BUILD as source of truth"
           else
-            echo "✅ Project file is current or newer, incrementing from project file"
-            NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
-            STRATEGY="Project File + 1"
+            echo "❌ Google Play Console query failed, using safe fallback"
+            # Safe fallback: use a reasonable default
+            NEXT_BUILD=100
+            STRATEGY="Safe fallback (Google Play query failed)"
           fi
           
-          # Version name increment
+          # Version name increment (keep existing logic)
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
           MAJOR=${VERSION_PARTS[0]}
           MINOR=${VERSION_PARTS[1]}
@@ -1026,34 +1047,36 @@ jobs:
           NEXT_PATCH=$((PATCH + 1))
           NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
           
-          echo "📋 Fault-Tolerant Version Resolution:"
-          echo "  Current Version: $CURRENT_VERSION_NAME (build $CURRENT_VERSION_CODE)"
+          echo "📋 Store-First Version Resolution:"
+          echo "  Current Version Name: $CURRENT_VERSION_NAME"
           echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
           echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
           echo "  Strategy Used: $STRATEGY"
+          echo "  littleVersionCode will be: $NEXT_BUILD"
+          echo "  Actual versionCode will be: $((60 + NEXT_BUILD))"
           
           echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
-          echo "CURRENT_VERSION_CODE=$CURRENT_VERSION_CODE" >> $GITHUB_ENV
           echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+          echo "STRATEGY=$STRATEGY" >> $GITHUB_ENV
 
-      - name: Update Android version for build (FAULT TOLERANT)
+      - name: Update Android version for build (STORE-FIRST)
         working-directory: ./private-repo/android/app
         run: |
-          echo "🔄 Updating Android version using fault-tolerant calculation..."
+          echo "🔄 Updating Android version using store-first calculation..."
           echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
-          echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
+          echo "  littleVersionCode: → $NEXT_VERSION_CODE"
+          echo "  Actual versionCode will be: $((60 + NEXT_VERSION_CODE))"
           
           # Update version name
           sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
           
-          # Update version code  
-          sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
+          # No need to update versionCode line - we pass via -PlittleVersionCode
           
           # Verify the changes
           echo "✅ Updated build.gradle:"
           echo "$(grep versionName build.gradle)"
-          echo "$(grep "versionCode project.hasProperty" build.gradle)"
+          echo "Will use: -PlittleVersionCode=$NEXT_VERSION_CODE"
 
       - name: Build Release AAB
         working-directory: ./private-repo/android

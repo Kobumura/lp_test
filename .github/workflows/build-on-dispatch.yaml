@@ -1130,7 +1130,7 @@ jobs:
           git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
           git push
 
-  # Summary job with enhanced Slack integration
+  # Summary job with fixed action accessibility
   summary:
     runs-on: ubuntu-latest
     needs: [ setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, ios-build, android-build ]
@@ -1139,6 +1139,11 @@ jobs:
       # Set SLACK_WEBHOOK_URL from repository dispatch payload
       SLACK_WEBHOOK_URL: ${{ github.event.client_payload.secrets.SLACK_WEBHOOK_URL || '' }}
     steps:
+      # CRITICAL: Ensure public repo action is available
+      - name: Checkout Public Repository (for actions)
+        uses: actions/checkout@v4
+        # This checks out the public repo (where this workflow runs) to ensure actions are available
+
       - name: Checkout Private Repository
         uses: actions/checkout@v4
         with:
@@ -1194,6 +1199,22 @@ jobs:
           if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.android-build.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
 
           echo "overall_success=$OVERALL_SUCCESS" >> $GITHUB_OUTPUT
+
+      - name: Debug Action Availability
+        run: |
+          echo "🔍 Checking action availability..."
+          echo "Current directory: $(pwd)"
+          echo "Contents:"
+          ls -la
+          echo ""
+          echo "Checking for .github directory:"
+          ls -la .github/ || echo "No .github directory found"
+          echo ""
+          echo "Checking for actions directory:"
+          ls -la .github/actions/ || echo "No .github/actions directory found"
+          echo ""
+          echo "Checking for slack-notify action:"
+          ls -la .github/actions/slack-notify/ || echo "No slack-notify action found"
 
       - name: Send Slack Notification
         if: env.SLACK_WEBHOOK_URL != ''

@@ -1136,6 +1136,9 @@ jobs:
     needs: [setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, ios-build, android-build]
     if: always()
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: LittlePipes Build Summary
         run: |
           echo "🚀 LittlePipes Build Complete!"

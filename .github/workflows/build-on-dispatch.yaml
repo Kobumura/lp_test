@@ -23,7 +23,7 @@ on:
       dev_mode:
         description: '🔧 Dev Mode: Skip tests for pipeline development'
         type: boolean
-        default: true
+        default: false
 
 jobs:
   setup:
@@ -68,7 +68,7 @@ jobs:
             RUN_BUILD="true"
             TRACK="internal"
             FAIL_FAST="true"
-            DEV_MODE="${{ inputs.dev_mode || 'true' }}"
+            DEV_MODE="${{ inputs.dev_mode || 'false' }}"
           fi
           
           # 🔧 DEVELOPMENT MODE PROCESSING

@@ -42,6 +42,10 @@ jobs:
       use_buildjet: ${{ steps.config.outputs.use_buildjet }}
       use_warpbuild: ${{ steps.config.outputs.use_warpbuild }}
       dev_mode: ${{ steps.config.outputs.dev_mode }}
+      # 🆕 BRANCH AWARENESS OUTPUTS
+      target_ref: ${{ steps.config.outputs.target_ref }}
+      target_sha: ${{ steps.config.outputs.target_sha }}
+      trigger_actor: ${{ steps.config.outputs.trigger_actor }}
     steps:
       - name: Configure Build
         id: config
@@ -59,6 +63,10 @@ jobs:
             TRACK="${{ github.event.client_payload.track || 'internal' }}"
             FAIL_FAST="${{ github.event.client_payload.fail_fast || 'true' }}"
             DEV_MODE="${{ github.event.client_payload.dev_mode || 'true' }}"
+            # 🆕 BRANCH INFORMATION
+            TARGET_REF="${{ github.event.client_payload.ref || 'main' }}"
+            TARGET_SHA="${{ github.event.client_payload.sha || '' }}"
+            TRIGGER_ACTOR="${{ github.event.client_payload.trigger_actor || 'unknown' }}"
           else
             TARGET_REPO="${{ inputs.target_repo }}"
             PLATFORM="${{ inputs.platform }}"
@@ -69,6 +77,10 @@ jobs:
             TRACK="internal"
             FAIL_FAST="true"
             DEV_MODE="${{ inputs.dev_mode || 'false' }}"
+            # 🆕 BRANCH INFORMATION (defaults for manual runs)
+            TARGET_REF="main"
+            TARGET_SHA=""
+            TRIGGER_ACTOR="${{ github.actor }}"
           fi
           
           # 🔧 DEVELOPMENT MODE PROCESSING
@@ -82,6 +94,9 @@ jobs:
           
           echo "📋 Input Configuration:"
           echo "  Target Repo: $TARGET_REPO"
+          echo "  Target Ref: $TARGET_REF"
+          echo "  Target SHA: $TARGET_SHA"
+          echo "  Trigger Actor: $TRIGGER_ACTOR"
           echo "  Platform: $PLATFORM"
           echo "  Speed: $SPEED"
           echo "  UI Tests: $RUN_UI_TESTS"
@@ -141,6 +156,10 @@ jobs:
           echo "use_buildjet=$USE_BUILDJET" >> $GITHUB_OUTPUT
           echo "use_warpbuild=$USE_WARPBUILD" >> $GITHUB_OUTPUT
           echo "dev_mode=$DEV_MODE" >> $GITHUB_OUTPUT
+          # 🆕 BRANCH AWARENESS OUTPUTS
+          echo "target_ref=$TARGET_REF" >> $GITHUB_OUTPUT
+          echo "target_sha=$TARGET_SHA" >> $GITHUB_OUTPUT
+          echo "trigger_actor=$TRIGGER_ACTOR" >> $GITHUB_OUTPUT
           
           echo ""
           echo "✅ Configuration complete!"
@@ -156,6 +175,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
@@ -203,6 +223,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Setup Node.js
@@ -528,6 +549,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Setup Node.js (buildjet)
@@ -794,6 +816,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Setup Node.js
@@ -905,7 +928,7 @@ jobs:
         run: |
           fastlane ios beta
 
-      # ✅ NEW: Commit iOS version bump to private repo
+      # ✅ Commit iOS version bump to private repo
       - name: Commit iOS version bump to private repo
         working-directory: ./private-repo
         run: |
@@ -920,7 +943,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "✅ No iOS version changes to commit"
           else
-            git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]"
+            git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci] [LP-16]"
             git push
             echo "✅ iOS version bump committed and pushed"
           fi
@@ -964,6 +987,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Install Java (buildjet)
@@ -1127,7 +1151,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci]" || exit 0
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci] [LP-16]" || exit 0
           git push
 
   # Summary job with fixed action accessibility
@@ -1149,6 +1173,7 @@ jobs:
         with:
           repository: ${{ needs.setup.outputs.target_repo }}
           token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          ref: ${{ needs.setup.outputs.target_ref }}
           path: ./private-repo
 
       - name: Calculate Build Duration
@@ -1227,7 +1252,8 @@ jobs:
           platform: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && 'both' || needs.setup.outputs.build_ios == 'true' && 'ios' || 'android' }}
           dev_mode: ${{ needs.setup.outputs.dev_mode }}
           target_repo: ${{ needs.setup.outputs.target_repo }}
-          trigger_actor: ${{ github.event.client_payload.trigger_actor || github.actor }}
+          trigger_actor: ${{ needs.setup.outputs.trigger_actor }}
+          target_ref: ${{ needs.setup.outputs.target_ref }}
           # Test results
           unit_tests_result: ${{ needs.unit-tests.result }}
           ios_ui_tests_result: ${{ needs.ios-ui-tests.result }}
@@ -1242,6 +1268,8 @@ jobs:
         run: |
           echo "🚀 LittlePipes Build Complete!"
           echo "Target: ${{ needs.setup.outputs.target_repo }}"
+          echo "Branch: ${{ needs.setup.outputs.target_ref }}"
+          echo "Trigger: ${{ needs.setup.outputs.trigger_actor }}"
           echo "Platform: ${{ needs.setup.outputs.build_ios == 'true' && 'iOS' || '' }}${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && ' + ' || '' }}${{ needs.setup.outputs.build_android == 'true' && 'Android' || '' }}"
           echo "Duration: ${{ steps.duration.outputs.duration_formatted }}"
           echo "Overall Status: ${{ steps.results.outputs.overall_success == 'true' && '✅ SUCCESS' || '❌ FAILURE' }}"

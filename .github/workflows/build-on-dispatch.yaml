@@ -1290,3 +1290,36 @@ jobs:
           fi
 
           echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
+
+      - name: Build Signed Release APK
+        working-directory: ./private-repo/android
+        run: |
+          echo "🔐 Building signed release APK with real signing credentials..."
+          ./gradlew assembleRelease \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
+            --stacktrace
+
+          RELEASE_APK_PATH="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$RELEASE_APK_PATH" ]; then
+            echo "❌ Signed release APK not found at $RELEASE_APK_PATH"
+            exit 1
+          fi
+
+          echo "✅ Signed release APK built: $RELEASE_APK_PATH"
+
+          echo "🔍 Extracting SHA-1 fingerprint from the signing certificate..."
+          if command -v keytool > /dev/null; then
+            keytool -printcert -jarfile "$RELEASE_APK_PATH" | grep SHA1 || echo "⚠️ Could not extract SHA1 (keytool failed)"
+          else
+            echo "⚠️ keytool not available. Install Java JDK to extract SHA-1."
+          fi
+
+      - name: Upload Signed Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-apk
+          path: ./private-repo/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 5

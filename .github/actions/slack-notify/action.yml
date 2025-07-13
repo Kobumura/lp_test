@@ -230,6 +230,10 @@ runs:
                   "elements": [
                     {
                       "type": "mrkdwn",
+                      "text": "🔐 *SHA-1:* $ANDROID_RELEASE_SHA1"
+                    },
+                    {
+                      "type": "mrkdwn",
                       "text": "🚀 <https://github.com/${{ github.repository }}/actions|View Workflow> | <https://github.com/${{ inputs.target_repo }}|Repository>"
                     }
                   ]

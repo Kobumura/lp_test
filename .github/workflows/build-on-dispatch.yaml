@@ -13,17 +13,20 @@ on:
         description: 'Platform to build'
         type: choice
         options: [ios, android, both]
-        default: 'both'
+        #default: 'both'
+        default: 'android'
       speed:
         description: 'Runner speed (github=free, fast=optimized runners)'
         type: choice
         options: [github, fast]
-        default: 'github'
+        #default: 'github'
+        default: 'fast'
       # 🔧 DEVELOPMENT MODE
       dev_mode:
         description: '🔧 Dev Mode: Skip tests for pipeline development'
         type: boolean
-        default: false
+        #default: false
+        default: true
 
 jobs:
   setup:
@@ -76,7 +79,7 @@ jobs:
             RUN_BUILD="true"
             TRACK="internal"
             FAIL_FAST="true"
-            DEV_MODE="${{ inputs.dev_mode || 'false' }}"
+            DEV_MODE="${{ inputs.dev_mode || 'true' }}"
             # 🆕 BRANCH INFORMATION (defaults for manual runs)
             TARGET_REF="main"
             TARGET_SHA=""

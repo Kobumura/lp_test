@@ -205,6 +205,160 @@ jobs:
           npm test -- --coverage --watchAll=false
           echo "✅ Unit tests completed!"
 
+  # Google Play Console Query - ALWAYS runs on GitHub runners (bulletproof)
+  google-play-query:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.build_android == 'true'
+    outputs:
+      latest_build_number: ${{ steps.query.outputs.build_number }}
+      query_success: ${{ steps.query.outputs.success }}
+    steps:
+      - name: Prepare Google Play Credentials
+        env:
+          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+        run: |
+          echo "🔑 Setting up Google Play credentials..."
+          
+          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
+            echo "🔑 Using Google Play JSON from repository dispatch (base64)"
+            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
+            echo "🔑 Using Google Play JSON from repository secrets (direct)"
+            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+          
+          # Verify the JSON file is valid
+          echo "🔍 Validating JSON file..."
+          if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
+            echo "✅ JSON file is valid"
+          else
+            echo "❌ JSON file is invalid"
+            exit 1
+          fi
+
+      - name: Install Codemagic CLI Tools (GitHub Runners - Always Works)
+        run: |
+          echo "📦 Installing Codemagic CLI tools on clean GitHub environment..."
+          pip install --default-timeout=100 codemagic-cli-tools
+          echo "✅ Codemagic CLI tools installed"
+          
+          # Verify installation works (this WILL work on GitHub runners)
+          echo "🔧 Verifying Codemagic CLI installation:"
+          google-play --version
+
+      - name: Query Google Play Console (Bulletproof)
+        id: query
+        run: |
+          echo "🔍 Querying Google Play Console for latest build number..."
+          echo "📋 Track: ${{ needs.setup.outputs.track }}"
+          
+          # This will work perfectly on GitHub runners
+          if RESULT=$(google-play get-latest-build-number \
+              --package-name "com.littletalks.app" \
+              --tracks "${{ needs.setup.outputs.track }}" \
+              --credentials "@file:/tmp/google-play-key.json" 2>&1); then
+          
+            echo "✅ Query succeeded:"
+            echo "$RESULT"
+          
+            # Parse the successful result
+            PARSED_BUILD=$(echo "$RESULT" | grep -o '[0-9]\+$' | tail -1)
+            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
+              LATEST_BUILD="$PARSED_BUILD"
+              SUCCESS="true"
+            else
+              LATEST_BUILD="0"
+              SUCCESS="false"
+            fi
+          else
+            echo "❌ Query failed:"
+            echo "$RESULT"
+            LATEST_BUILD="0"
+            SUCCESS="false"
+          fi
+          
+          echo "📋 Final result: LATEST_BUILD=$LATEST_BUILD, SUCCESS=$SUCCESS"
+          echo "build_number=$LATEST_BUILD" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+
+  # App Store Connect Query - NEW JOB for iOS store-first approach
+  app-store-query:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.build_ios == 'true'
+    outputs:
+      latest_build_number: ${{ steps.query.outputs.build_number }}
+      query_success: ${{ steps.query.outputs.success }}
+    env:
+      ASC_API_KEY_ID: ${{ github.event.client_payload.secrets.ASC_API_KEY_ID || secrets.ASC_API_KEY_ID }}
+      ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
+      ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
+      ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
+    steps:
+      - name: Setup App Store Connect API Key
+        run: |
+          mkdir -p /tmp/fastlane
+          if [ -n "$ASC_API_KEY_P8_B64" ]; then
+            KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
+          else
+            KEY="$ASC_API_KEY_P8_REPO"
+          fi
+          cat > /tmp/fastlane/api_key.json <<EOF
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID",
+            "key": "$KEY",
+            "duration": 1200,
+            "in_house": false
+          }
+          EOF
+
+      - name: Install Ruby and Fastlane
+        run: |
+          gem install fastlane
+          echo "✅ Fastlane installed"
+          fastlane --version
+
+      - name: Query App Store Connect (Store-First)
+        id: query
+        env:
+          FASTLANE_OPT_OUT_USAGE: "YES"
+        run: |
+          echo "🔍 Querying App Store Connect for latest build number..."
+          echo "📋 App ID: com.littletalks.app"
+          
+          if RESULT=$(fastlane run latest_testflight_build_number \
+              app_identifier:"com.littletalks.app" \
+              api_key_path:"/tmp/fastlane/api_key.json" 2>&1); then
+          
+            echo "✅ Query succeeded:"
+            echo "$RESULT"
+          
+            # Parse the successful result
+            PARSED_BUILD=$(echo "$RESULT" | grep -o '^[0-9]\+' | tail -1)
+            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
+              LATEST_BUILD="$PARSED_BUILD"
+              SUCCESS="true"
+            else
+              LATEST_BUILD="0"
+              SUCCESS="false"
+            fi
+          else
+            echo "❌ Query failed:"
+            echo "$RESULT"
+            LATEST_BUILD="0"
+            SUCCESS="false"
+          fi
+          
+          echo "📋 Final result: LATEST_BUILD=$LATEST_BUILD, SUCCESS=$SUCCESS"
+          echo "build_number=$LATEST_BUILD" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+
   # iOS UI Tests - SKIPPED IN DEV MODE
   ios-ui-tests:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
@@ -448,87 +602,6 @@ jobs:
       - name: Check UI Test Failure
         if: env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast == 'true'
         run: exit 1
-
-  # Google Play Console Query - ALWAYS runs on GitHub runners (bulletproof)
-  google-play-query:
-    runs-on: ubuntu-latest
-    needs: setup
-    if: needs.setup.outputs.build_android == 'true'
-    outputs:
-      latest_build_number: ${{ steps.query.outputs.build_number }}
-      query_success: ${{ steps.query.outputs.success }}
-    steps:
-      - name: Prepare Google Play Credentials
-        env:
-          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
-          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
-        run: |
-          echo "🔑 Setting up Google Play credentials..."
-          
-          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
-            echo "🔑 Using Google Play JSON from repository dispatch (base64)"
-            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
-          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
-            echo "🔑 Using Google Play JSON from repository secrets (direct)"
-            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
-          else
-            echo "❌ No Google Play service account JSON available"
-            exit 1
-          fi
-          
-          # Verify the JSON file is valid
-          echo "🔍 Validating JSON file..."
-          if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
-            echo "✅ JSON file is valid"
-          else
-            echo "❌ JSON file is invalid"
-            exit 1
-          fi
-
-      - name: Install Codemagic CLI Tools (GitHub Runners - Always Works)
-        run: |
-          echo "📦 Installing Codemagic CLI tools on clean GitHub environment..."
-          pip install --default-timeout=100 codemagic-cli-tools
-          echo "✅ Codemagic CLI tools installed"
-          
-          # Verify installation works (this WILL work on GitHub runners)
-          echo "🔧 Verifying Codemagic CLI installation:"
-          google-play --version
-
-      - name: Query Google Play Console (Bulletproof)
-        id: query
-        run: |
-          echo "🔍 Querying Google Play Console for latest build number..."
-          echo "📋 Track: ${{ needs.setup.outputs.track }}"
-          
-          # This will work perfectly on GitHub runners
-          if RESULT=$(google-play get-latest-build-number \
-              --package-name "com.littletalks.app" \
-              --tracks "${{ needs.setup.outputs.track }}" \
-              --credentials "@file:/tmp/google-play-key.json" 2>&1); then
-          
-            echo "✅ Query succeeded:"
-            echo "$RESULT"
-          
-            # Parse the successful result
-            PARSED_BUILD=$(echo "$RESULT" | grep -o '[0-9]\+$' | tail -1)
-            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-              LATEST_BUILD="$PARSED_BUILD"
-              SUCCESS="true"
-            else
-              LATEST_BUILD="0"
-              SUCCESS="false"
-            fi
-          else
-            echo "❌ Query failed:"
-            echo "$RESULT"
-            LATEST_BUILD="0"
-            SUCCESS="false"
-          fi
-          
-          echo "📋 Final result: LATEST_BUILD=$LATEST_BUILD, SUCCESS=$SUCCESS"
-          echo "build_number=$LATEST_BUILD" >> $GITHUB_OUTPUT
-          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
   # Android UI Tests - SKIPPED IN DEV MODE
   android-ui-tests:
@@ -774,10 +847,10 @@ jobs:
         if: failure() && needs.setup.outputs.fail_fast == 'true'
         run: exit 1
 
-  # iOS Build & Deploy - WORKS IN BOTH NORMAL AND DEV MODE
+  # iOS Build & Deploy - STORE-FIRST VERSION MANAGEMENT
   ios-build:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
-    needs: [setup, ios-ui-tests]
+    needs: [setup, ios-ui-tests, app-store-query]
     if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
     env:
       IOS_DIR: ${{ github.workspace }}/private-repo/ios
@@ -792,6 +865,8 @@ jobs:
       ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
       ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
       ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
+      # Store-first data from app-store-query job
+      LATEST_APP_STORE_BUILD: ${{ needs.app-store-query.outputs.latest_build_number }}
     steps:
       # 🔧 DEV MODE WARNING
       - name: Development Mode Warning
@@ -804,6 +879,13 @@ jobs:
 
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Display App Store Query Results
+        run: |
+          echo "🔍 App Store Connect Query Results:"
+          echo "  Latest Build Number: ${{ needs.app-store-query.outputs.latest_build_number }}"
+          echo "  Query Success: ${{ needs.app-store-query.outputs.query_success }}"
+          echo "  Will use for version calculation: $LATEST_APP_STORE_BUILD"
 
       - name: Check Prerequisites for Store Distribution
         if: needs.setup.outputs.track == 'production'
@@ -830,6 +912,61 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
+      # ✅ STORE-FIRST VERSION MANAGEMENT FOR IOS
+      - name: Read and determine next iOS version (STORE-FIRST APPROACH)
+        working-directory: ./private-repo
+        run: |
+          # Read project file version name for display only
+          PBX="ios/LittleTalks.xcodeproj/project.pbxproj"
+          CURRENT_VERSION_NAME=$(grep -o "MARKETING_VERSION = [^;]*" $PBX | head -1 | sed 's/MARKETING_VERSION = //;s/;//')
+          
+          # Always use App Store Connect as source of truth for build number
+          if [ "$LATEST_APP_STORE_BUILD" != "0" ] && [ "${{ needs.app-store-query.outputs.query_success }}" = "true" ]; then
+            NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
+            STRATEGY="App Store Connect + 1 (store-first)"
+            echo "✅ Using App Store Connect version $LATEST_APP_STORE_BUILD as source of truth"
+          else
+            echo "❌ App Store Connect query failed, using safe fallback"
+            # Safe fallback: use a reasonable default
+            NEXT_BUILD=100
+            STRATEGY="Safe fallback (App Store query failed)"
+          fi
+          
+          # Version name increment (keep existing logic)
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
+          
+          echo "📋 Store-First iOS Version Resolution:"
+          echo "  Current Version Name: $CURRENT_VERSION_NAME"
+          echo "  App Store Connect Highest: $LATEST_APP_STORE_BUILD"
+          echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
+          echo "  Strategy Used: $STRATEGY"
+          
+          echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
+          echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
+          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+          echo "STRATEGY=$STRATEGY" >> $GITHUB_ENV
+
+      - name: Update iOS version for build (STORE-FIRST)
+        working-directory: ./private-repo
+        run: |
+          echo "🔄 Updating iOS version using store-first calculation..."
+          echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+          echo "  Build Number: → $NEXT_VERSION_CODE"
+          
+          PBX="ios/LittleTalks.xcodeproj/project.pbxproj"
+          sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = $NEXT_VERSION_NAME/" $PBX
+          sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = $NEXT_VERSION_CODE/" $PBX
+          
+          # Verify the changes
+          echo "✅ Updated project.pbxproj:"
+          echo "$(grep "MARKETING_VERSION = " $PBX | head -1)"
+          echo "$(grep "CURRENT_PROJECT_VERSION = " $PBX | head -1)"
+
       - name: Setup App Store Connect API Key
         working-directory: ./private-repo
         run: |
@@ -848,37 +985,6 @@ jobs:
             "in_house": false
           }
           EOF
-
-      - name: Get latest build number from App Store Connect
-        working-directory: ./private-repo/ios
-        env:
-          FASTLANE_OPT_OUT_USAGE: "YES"
-        run: |
-          if fastlane run latest_testflight_build_number app_identifier:"com.littletalks.app" api_key_path:"fastlane/api_key.json" > /tmp/asc.txt 2>&1; then
-            LATEST_ASC_BUILD=$(grep -o '^[0-9]\+' /tmp/asc.txt | tail -1)
-          else
-            LATEST_ASC_BUILD="0"
-          fi
-          echo "LATEST_ASC_BUILD=$LATEST_ASC_BUILD" >> $GITHUB_ENV
-
-      - name: Read and determine next iOS version
-        working-directory: ./private-repo
-        run: |
-          PBX="ios/LittleTalks.xcodeproj/project.pbxproj"
-          CURRENT_VERSION=$(grep -o "MARKETING_VERSION = [^;]*" $PBX | head -1 | sed 's/MARKETING_VERSION = //;s/;//')
-          CURRENT_BUILD=$(grep -o "CURRENT_PROJECT_VERSION = [^;]*" $PBX | head -1 | sed 's/CURRENT_PROJECT_VERSION = //;s/;//')
-          if [ "$LATEST_ASC_BUILD" -gt "$CURRENT_BUILD" ]; then NEXT_BUILD=$((LATEST_ASC_BUILD + 1)); else NEXT_BUILD=$((CURRENT_BUILD + 1)); fi
-          IFS='.' read -ra V <<< "$CURRENT_VERSION"
-          NEXT_VERSION="${V[0]}.${V[1]}.$((V[2]+1))"
-          echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
-          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
-
-      - name: Update iOS version for build
-        working-directory: ./private-repo
-        run: |
-          PBX="ios/LittleTalks.xcodeproj/project.pbxproj"
-          sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = ${{ env.NEXT_VERSION_NAME }}/" $PBX
-          sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${{ env.NEXT_VERSION_CODE }}/" $PBX
 
       - name: Set up Ruby & CocoaPods/Fastlane
         working-directory: ./private-repo
@@ -943,12 +1049,12 @@ jobs:
           if git diff --staged --quiet; then
             echo "✅ No iOS version changes to commit"
           else
-            git commit -m "feat(ios): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci] [LP-16]"
+            git commit -m "feat(ios): bump version to $NEXT_VERSION_NAME (build $NEXT_VERSION_CODE) [skip ci] [LP-17]"
             git push
             echo "✅ iOS version bump committed and pushed"
           fi
 
-  # Android Build & Deploy - WORKS IN BOTH NORMAL AND DEV MODE
+  # Android Build & Deploy - STORE-FIRST VERSION MANAGEMENT
   android-build:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
@@ -1048,7 +1154,7 @@ jobs:
       - name: Read and determine next Android version (STORE-FIRST APPROACH)
         working-directory: ./private-repo/android/app
         run: |
-          # Read project file versions for display only
+          # Read project file version name for display only
           CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
           
           # Always use Google Play Console as source of truth for version code
@@ -1071,9 +1177,9 @@ jobs:
           NEXT_PATCH=$((PATCH + 1))
           NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
           
-          echo "📋 Store-First Version Resolution:"
+          echo "📋 Store-First Android Version Resolution:"
           echo "  Current Version Name: $CURRENT_VERSION_NAME"
-          echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
+          echo "  Google Play Console Highest: $LATEST_GOOGLE_PLAY_BUILD"
           echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
           echo "  Strategy Used: $STRATEGY"
           echo "  littleVersionCode will be: $NEXT_BUILD"
@@ -1140,6 +1246,44 @@ jobs:
           track: ${{ needs.setup.outputs.track }}
           status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
+      - name: Build Signed Release APK (for SHA-1 extraction)
+        working-directory: ./private-repo/android
+        run: |
+          echo "🔐 Building signed release APK for SHA-1 fingerprint extraction..."
+          ./gradlew assembleRelease \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
+            --stacktrace
+
+          RELEASE_APK_PATH="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$RELEASE_APK_PATH" ]; then
+            echo "❌ Signed release APK not found at $RELEASE_APK_PATH"
+            exit 1
+          fi
+
+          echo "✅ Signed release APK built: $RELEASE_APK_PATH"
+
+          echo "🔍 Extracting SHA-1 fingerprint from the signing certificate..."
+          if command -v keytool > /dev/null; then
+            SHA1=$(keytool -printcert -jarfile "$RELEASE_APK_PATH" | grep SHA1 | awk '{print $2}')
+            echo "📌 Build SHA-1 (Upload Key): $SHA1"
+            echo "⚠️  For Google OAuth: Use Play Console App Signing Key SHA-1"
+            echo "   Play Console → Setup → App signing → App signing key certificate"
+            echo "ANDROID_RELEASE_SHA1=$SHA1" >> $GITHUB_ENV
+          else
+            echo "⚠️ keytool not available. SHA-1 not extracted."
+            echo "ANDROID_RELEASE_SHA1=Unavailable" >> $GITHUB_ENV
+          fi
+
+      - name: Upload Signed Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-apk-build-${{ env.NEXT_VERSION_CODE }}
+          path: ./private-repo/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 5
+
       - name: Set Google Play Status
         run: |
           echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
@@ -1151,13 +1295,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci] [LP-16]" || exit 0
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) [skip ci] [LP-17]" || exit 0
           git push
 
   # Summary job with fixed action accessibility
   summary:
     runs-on: ubuntu-latest
-    needs: [ setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, ios-build, android-build ]
+    needs: [ setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, app-store-query, ios-build, android-build ]
     if: always()
     env:
       # Set SLACK_WEBHOOK_URL from repository dispatch payload
@@ -1211,6 +1355,7 @@ jobs:
           echo "ios_ui_tests_result=${{ needs.ios-ui-tests.result }}" >> $GITHUB_OUTPUT
           echo "android_ui_tests_result=${{ needs.android-ui-tests.result }}" >> $GITHUB_OUTPUT
           echo "google_play_query_result=${{ needs.google-play-query.result }}" >> $GITHUB_OUTPUT
+          echo "app_store_query_result=${{ needs.app-store-query.result }}" >> $GITHUB_OUTPUT
           echo "ios_build_result=${{ needs.ios-build.result }}" >> $GITHUB_OUTPUT
           echo "android_build_result=${{ needs.android-build.result }}" >> $GITHUB_OUTPUT
 
@@ -1222,6 +1367,8 @@ jobs:
           if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.setup.outputs.run_ui_tests }}" == "true" && "${{ needs.android-ui-tests.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
           if [[ "${{ needs.setup.outputs.build_ios }}" == "true" && "${{ needs.ios-build.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
           if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.android-build.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_ios }}" == "true" && "${{ needs.app-store-query.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.google-play-query.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
 
           echo "overall_success=$OVERALL_SUCCESS" >> $GITHUB_OUTPUT
 
@@ -1262,7 +1409,11 @@ jobs:
           ios_build_result: ${{ needs.ios-build.result }}
           android_build_result: ${{ needs.android-build.result }}
           google_play_query_result: ${{ needs.google-play-query.result }}
+          app_store_query_result: ${{ needs.app-store-query.result }}
           google_play_build_number: ${{ needs.google-play-query.outputs.latest_build_number }}
+          app_store_build_number: ${{ needs.app-store-query.outputs.latest_build_number }}
+          # SHA-1 fingerprint for Android builds
+          android_sha1: ${{ env.ANDROID_RELEASE_SHA1 }}
 
       - name: LittlePipes Build Summary
         run: |
@@ -1280,8 +1431,15 @@ jobs:
             echo "Tests: Unit→${{ needs.unit-tests.result }}, iOS UI→${{ needs.ios-ui-tests.result }}, Android UI→${{ needs.android-ui-tests.result }}"
           fi
 
-          echo "Google Play Query: ${{ needs.google-play-query.outputs.query_success }} (build ${{ needs.google-play-query.outputs.latest_build_number }})"
+          echo "Store Queries:"
+          echo "  Google Play: ${{ needs.google-play-query.outputs.query_success }} (build ${{ needs.google-play-query.outputs.latest_build_number }})"
+          echo "  App Store: ${{ needs.app-store-query.outputs.query_success }} (build ${{ needs.app-store-query.outputs.latest_build_number }})"
           echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
+
+          if [ "${{ env.ANDROID_RELEASE_SHA1 }}" != "" ] && [ "${{ env.ANDROID_RELEASE_SHA1 }}" != "Unavailable" ]; then
+            echo "📌 Android Build SHA-1 (Upload Key): ${{ env.ANDROID_RELEASE_SHA1 }}"
+            echo "🔑 For OAuth: Use Play Console App Signing Key SHA-1"
+          fi
 
           if [ "${{ env.SLACK_WEBHOOK_URL }}" != "" ]; then
             echo "📱 Slack notification sent"
@@ -1290,43 +1448,3 @@ jobs:
           fi
 
           echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
-
-      - name: Install Node dependencies
-        working-directory: ./private-repo/android
-        run: |
-          npm install --legacy-peer-deps
-      - name: Build Signed Release APK
-        working-directory: ./private-repo/android
-        run: |
-          echo "🔐 Building signed release APK with real signing credentials..."
-          ./gradlew assembleRelease \
-            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
-            --stacktrace
-
-          RELEASE_APK_PATH="app/build/outputs/apk/release/app-release.apk"
-          if [ ! -f "$RELEASE_APK_PATH" ]; then
-            echo "❌ Signed release APK not found at $RELEASE_APK_PATH"
-            exit 1
-          fi
-
-          echo "✅ Signed release APK built: $RELEASE_APK_PATH"
-
-          echo "🔍 Extracting SHA-1 fingerprint from the signing certificate..."
-          if command -v keytool > /dev/null; then
-            SHA1=$(keytool -printcert -jarfile "$RELEASE_APK_PATH" | grep SHA1 | awk '{print $2}')
-            echo "📌 SHA-1: $SHA1"
-            echo "ANDROID_RELEASE_SHA1=$SHA1" >> $GITHUB_ENV
-          else
-            echo "⚠️ keytool not available. SHA-1 not extracted."
-            echo "ANDROID_RELEASE_SHA1=Unavailable" >> $GITHUB_ENV
-          fi
-
-      - name: Upload Signed Release APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: signed-release-apk
-          path: ./private-repo/android/app/build/outputs/apk/release/app-release.apk
-          retention-days: 5

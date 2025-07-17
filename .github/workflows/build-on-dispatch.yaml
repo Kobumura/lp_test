@@ -877,24 +877,68 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      - name: Setup App Store Connect API Key
+      - name: Setup App Store Connect API Key with Debug
         working-directory: ./private-repo
         run: |
+          echo "🔧 Setting up App Store Connect API Key..."
           mkdir -p ios/fastlane
+          
+          # Debug: Show what we're working with
+          echo "=== Environment Debug ==="
+          echo "ASC_API_KEY_ID: $ASC_API_KEY_ID"
+          echo "ASC_ISSUER_ID: $ASC_ISSUER_ID"
+          echo "ASC_API_KEY_P8_B64 length: ${#ASC_API_KEY_P8_B64}"
+          echo "ASC_API_KEY_P8_REPO length: ${#ASC_API_KEY_P8_REPO}"
+          
+          # Get the key (same logic as before)
           if [ -n "$ASC_API_KEY_P8_B64" ]; then
+            echo "🔑 Using base64 encoded key"
             KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
           else
+            echo "🔑 Using direct key"
             KEY="$ASC_API_KEY_P8_REPO"
           fi
-          cat > ios/fastlane/api_key.json <<EOF
-          {
-            "key_id": "$ASC_API_KEY_ID",
-            "issuer_id": "$ASC_ISSUER_ID",
-            "key": "$KEY",
-            "duration": 1200,
-            "in_house": false
-          }
-          EOF
+          
+          # Debug: Show key format
+          echo "=== Key Debug ==="
+          echo "Key starts with: $(echo "$KEY" | head -1)"
+          echo "Key ends with: $(echo "$KEY" | tail -1)"
+          echo "Key line count: $(echo "$KEY" | wc -l)"
+          
+          # Use jq to properly create JSON (handles all escaping automatically)
+          echo "🔧 Creating JSON with jq..."
+          jq -n \
+            --arg key_id "$ASC_API_KEY_ID" \
+            --arg issuer_id "$ASC_ISSUER_ID" \
+            --arg key "$KEY" \
+            '{
+              "key_id": $key_id,
+              "issuer_id": $issuer_id,
+              "key": $key,
+              "duration": 1200,
+              "in_house": false
+            }' > ios/fastlane/api_key.json
+          
+          # Debug: Validate the created file
+          echo "=== Created File Debug ==="
+          echo "File size: $(wc -c < ios/fastlane/api_key.json) bytes"
+          echo "File exists: $(test -f ios/fastlane/api_key.json && echo 'YES' || echo 'NO')"
+          
+          # Validate JSON syntax
+          if jq . ios/fastlane/api_key.json > /dev/null 2>&1; then
+            echo "✅ JSON syntax is valid"
+          else
+            echo "❌ JSON syntax is invalid!"
+            echo "=== File contents ==="
+            cat ios/fastlane/api_key.json
+            exit 1
+          fi
+          
+          # Show just the structure (without exposing the full key)
+          echo "=== JSON structure ==="
+          jq 'del(.key) | . + {"key": "REDACTED"}' ios/fastlane/api_key.json
+          
+          echo "✅ API key file created successfully"
 
       - name: Get latest build number from App Store Connect
         working-directory: ./private-repo/ios

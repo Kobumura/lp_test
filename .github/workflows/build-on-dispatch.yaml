@@ -954,8 +954,13 @@ jobs:
 
       - name: Create Match Keychain & SSH
         run: |
-          security create-keychain -p "pass" ios-build.keychain
-          security unlock-keychain -p "pass" ios-build.keychain
+          # Use EXACT same configuration that worked locally
+          security create-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security unlock-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security set-keychain-settings -lut 21600 ~/Library/Keychains/ios-build.keychain
+          security list-keychains -d user -s ~/Library/Keychains/ios-build.keychain $(security list-keychains -d user | sed s/\"//g)
+          
+          # SSH setup (unchanged)
           mkdir -p ~/.ssh
           if [ -n "$MATCH_SSH_KEY_B64" ]; then
             echo "$MATCH_SSH_KEY_B64" | base64 -d > ~/.ssh/id_rsa

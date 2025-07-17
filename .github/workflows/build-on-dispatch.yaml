@@ -976,6 +976,39 @@ jobs:
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "com.littletalks.app" --team_id "$APPLE_TEAM_ID" --readonly true
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "com.littletalks.app.OneSignalNotificationServiceExt" --team_id "$APPLE_TEAM_ID" --readonly true
 
+      - name: Create exportOptions.plist
+        working-directory: ./private-repo
+        run: |
+          cat > ios/exportOptions.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>N585XH3222</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>manageAppVersionAndBuildNumber</key>
+              <false/>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>com.littletalks.app</key>
+                  <string>match AppStore com.littletalks.app</string>
+                  <key>com.littletalks.app.OneSignalNotificationServiceExt</key>
+                  <string>match AppStore com.littletalks.app.OneSignalNotificationServiceExt</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+
       - name: Build & Archive
         working-directory: ./private-repo
         run: |

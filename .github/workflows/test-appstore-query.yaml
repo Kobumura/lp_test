@@ -1,45 +1,27 @@
-name: Test App Store Connect Query
+name: Debug App Store Connect - Detailed Investigation
 
 on:
   workflow_dispatch:
-    inputs:
-      debug_level:
-        description: 'Debug level'
-        type: choice
-        options: [basic, verbose]
-        default: 'verbose'
 
 jobs:
-  test-appstore-query:
+  debug-appstore:
     runs-on: ubuntu-latest
     steps:
-      - name: Test App Store Connect Query
+      - name: Debug App Store Connect API
         env:
-          # Hardcoded for testing
           BUNDLE_ID: "com.littletalks.app"
           API_KEY_ID: "${{ secrets.ASC_API_KEY_ID }}"
           ISSUER_ID: "${{ secrets.ASC_ISSUER_ID }}"
           API_KEY_P8: "${{ secrets.ASC_API_KEY_P8 }}"
         run: |
-          echo "🔍 App Store Connect Query Test"
-          echo "================================"
-          
-          echo "📋 Testing with:"
-          echo "  Bundle ID: $BUNDLE_ID"
-          echo "  Key ID: $API_KEY_ID"
-          echo "  Issuer ID: $ISSUER_ID"
-          echo "  Key length: ${#API_KEY_P8} characters"
-          echo ""
+          echo "🔍 DETAILED App Store Connect Investigation"
+          echo "=========================================="
           
           # Install Fastlane
-          echo "📦 Installing Fastlane..."
           sudo gem install fastlane
-          echo "✅ Fastlane installed"
-          fastlane --version
           echo ""
           
           # Create API key file
-          echo "🔑 Creating API key file..."
           mkdir -p ./fastlane
           jq -n \
             --arg key_id "$API_KEY_ID" \
@@ -53,136 +35,124 @@ jobs:
               "in_house": false
             }' > ./fastlane/api_key.json
           
-          echo "✅ API key file created ($(wc -c < ./fastlane/api_key.json) bytes)"
-          echo ""
-          
-          # Test 1: Latest TestFlight build
-          echo "🧪 TEST 1: Latest TestFlight Build"
-          echo "-----------------------------------"
           export FASTLANE_OPT_OUT_USAGE=YES
           
+          echo "🧪 TEST 1: Verify API Key Works"
+          echo "-------------------------------"
+          if fastlane run app_store_connect_api_key \
+              key_id:"$API_KEY_ID" \
+              issuer_id:"$ISSUER_ID" \
+              key_content:"$API_KEY_P8" > /tmp/api_test.txt 2>&1; then
+            echo "✅ API key validation succeeded"
+            cat /tmp/api_test.txt
+          else
+            echo "❌ API key validation failed:"
+            cat /tmp/api_test.txt
+          fi
+          echo ""
+          
+          echo "🧪 TEST 2: List All Apps (to verify permissions)"
+          echo "------------------------------------------------"
+          if fastlane run spaceship \
+              username:"$API_KEY_ID" \
+              api_key_path:"./fastlane/api_key.json" > /tmp/apps.txt 2>&1; then
+            echo "✅ Apps listing succeeded:"
+            cat /tmp/apps.txt
+          else
+            echo "❌ Apps listing failed:"
+            head -20 /tmp/apps.txt
+          fi
+          echo ""
+          
+          echo "🧪 TEST 3: TestFlight Build Number (RAW OUTPUT)"
+          echo "----------------------------------------------"
+          fastlane run latest_testflight_build_number \
+              app_identifier:"$BUNDLE_ID" \
+              api_key_path:"./fastlane/api_key.json" 2>&1 | tee /tmp/testflight_raw.txt
+          
+          echo ""
+          echo "🔍 Raw TestFlight output analysis:"
+          echo "  Total lines: $(wc -l < /tmp/testflight_raw.txt)"
+          echo "  Lines with 'build': $(grep -i build /tmp/testflight_raw.txt | wc -l)"
+          echo "  Lines with 'result': $(grep -i result /tmp/testflight_raw.txt | wc -l)"
+          echo "  Lines with numbers: $(grep -o '[0-9]\+' /tmp/testflight_raw.txt | wc -l)"
+          
+          echo ""
+          echo "🔍 All lines containing numbers:"
+          grep '[0-9]' /tmp/testflight_raw.txt || echo "No lines with numbers found"
+          
+          echo ""
+          
+          echo "🧪 TEST 4: Alternative Build Number Query"
+          echo "----------------------------------------"
+          # Try a different approach - get app info
+          if fastlane run get_app_identifier > /tmp/app_info.txt 2>&1; then
+            echo "✅ App info query succeeded:"
+            cat /tmp/app_info.txt
+          else
+            echo "❌ App info query failed:"
+            cat /tmp/app_info.txt
+          fi
+          echo ""
+          
+          echo "🧪 TEST 5: Manual Version Check (if we had xcode project)"
+          echo "--------------------------------------------------------"
+          echo "Note: This would require the actual Xcode project, but let's see what happens..."
+          if fastlane run get_version_number > /tmp/version.txt 2>&1; then
+            echo "✅ Version number query succeeded:"
+            cat /tmp/version.txt
+          else
+            echo "❌ Version number query failed (expected without project):"
+            head -10 /tmp/version.txt
+          fi
+          echo ""
+          
+          echo "🧪 TEST 6: Try Specific Version Query"
+          echo "------------------------------------"
+          # Try to get build number for a specific version
           if fastlane run latest_testflight_build_number \
               app_identifier:"$BUNDLE_ID" \
-              api_key_path:"./fastlane/api_key.json" > /tmp/testflight.txt 2>&1; then
-            
-            echo "✅ TestFlight query succeeded:"
-            cat /tmp/testflight.txt
-            echo ""
-            
-            TESTFLIGHT_BUILD=$(grep -E "(Result: |build: )" /tmp/testflight.txt | grep -o '[0-9]\+' | tail -1)
-            echo "📊 Parsed TestFlight build: '$TESTFLIGHT_BUILD'"
-            
-            # Show what we're parsing
-            echo "🔍 Lines that match our pattern:"
-            grep -E "(Result: |build: )" /tmp/testflight.txt || echo "No matches found"
-            
+              version:"1.5.15" \
+              api_key_path:"./fastlane/api_key.json" > /tmp/version_specific.txt 2>&1; then
+            echo "✅ Version-specific query succeeded:"
+            cat /tmp/version_specific.txt
           else
-            echo "❌ TestFlight query failed:"
-            cat /tmp/testflight.txt
-            TESTFLIGHT_BUILD="0"
+            echo "❌ Version-specific query failed:"
+            cat /tmp/version_specific.txt
           fi
-          
           echo ""
           
-          # Test 2: App Store build number  
-          echo "🧪 TEST 2: App Store Build Number"
-          echo "----------------------------------"
-          if fastlane run app_store_build_number \
-              app_identifier:"$BUNDLE_ID" \
-              api_key_path:"./fastlane/api_key.json" > /tmp/appstore.txt 2>&1; then
+          echo "📋 ANALYSIS & DEBUGGING"
+          echo "======================"
+          
+          # Check if any queries found numbers
+          ALL_NUMBERS=$(cat /tmp/*.txt | grep -o '[0-9]\+' | sort -n | uniq)
+          if [ -n "$ALL_NUMBERS" ]; then
+            echo "🔢 All numbers found in outputs:"
+            echo "$ALL_NUMBERS"
             
-            echo "✅ App Store query succeeded:"
-            cat /tmp/appstore.txt
-            echo ""
-            
-            APPSTORE_BUILD=$(grep -E "(Result: |build: |Build: )" /tmp/appstore.txt | grep -o '[0-9]\+' | tail -1)
-            echo "📊 Parsed App Store build: '$APPSTORE_BUILD'"
-            
-            # Show what we're parsing
-            echo "🔍 Lines that match our pattern:"
-            grep -E "(Result: |build: |Build: )" /tmp/appstore.txt || echo "No matches found"
-            
+            HIGHEST=$(echo "$ALL_NUMBERS" | tail -1)
+            echo "🎯 Highest number found: $HIGHEST"
           else
-            echo "❌ App Store query failed:"
-            cat /tmp/appstore.txt
-            APPSTORE_BUILD="0"
+            echo "❌ No numbers found in any output"
           fi
           
           echo ""
-          
-          # Test 3: Try to list all builds
-          echo "🧪 TEST 3: List All Builds (if available)"
-          echo "------------------------------------------"
-          if fastlane run download_dsyms \
-              app_identifier:"$BUNDLE_ID" \
-              api_key_path:"./fastlane/api_key.json" \
-              output_directory:"/tmp" > /tmp/builds.txt 2>&1; then
-            
-            echo "✅ Build listing succeeded:"
-            cat /tmp/builds.txt
-          else
-            echo "⚠️ Build listing failed (this is expected):"
-            head -20 /tmp/builds.txt
-          fi
+          echo "🔍 POSSIBLE ISSUES:"
+          echo "1. API Key Permissions - Does it have TestFlight access?"
+          echo "2. Bundle ID Mismatch - Is 'com.littletalks.app' exact?"
+          echo "3. App Not in TestFlight - Only in App Store?"
+          echo "4. Different App Store Connect Team"
+          echo "5. API Version Compatibility"
           
           echo ""
-          
-          # Summary and recommendations
-          echo "📋 SUMMARY & ANALYSIS"
-          echo "====================="
-          echo "TestFlight Build: '$TESTFLIGHT_BUILD'"
-          echo "App Store Build: '$APPSTORE_BUILD'"
-          
-          # Determine highest
-          HIGHEST_BUILD=0
-          SOURCE="none"
-          
-          if [[ "$TESTFLIGHT_BUILD" =~ ^[0-9]+$ ]] && [ "$TESTFLIGHT_BUILD" -gt "$HIGHEST_BUILD" ]; then
-            HIGHEST_BUILD="$TESTFLIGHT_BUILD"
-            SOURCE="TestFlight"
-          fi
-          
-          if [[ "$APPSTORE_BUILD" =~ ^[0-9]+$ ]] && [ "$APPSTORE_BUILD" -gt "$HIGHEST_BUILD" ]; then
-            HIGHEST_BUILD="$APPSTORE_BUILD"
-            SOURCE="App Store"
-          fi
+          echo "💡 NEXT STEPS:"
+          echo "1. Check App Store Connect web interface manually"
+          echo "2. Verify API key has 'Developer' or 'Admin' role"
+          echo "3. Confirm exact bundle identifier spelling"
+          echo "4. Try querying a different app (if you have one) to test API"
           
           echo ""
-          echo "🎯 RESULTS:"
-          echo "  Highest Build Found: $HIGHEST_BUILD (from $SOURCE)"
-          
-          if [ "$HIGHEST_BUILD" -gt 0 ]; then
-            NEXT_BUILD=$((HIGHEST_BUILD + 1))
-            echo "  Next Build Should Be: $NEXT_BUILD"
-            
-            # Check if this seems reasonable
-            if [ "$HIGHEST_BUILD" -lt 10 ]; then
-              echo ""
-              echo "⚠️  WARNING: Build number seems very low!"
-              echo "   This might indicate the query isn't finding all builds."
-              echo "   Consider adding a safety buffer (e.g., use $((HIGHEST_BUILD + 50)))"
-            fi
-          else
-            echo "  ❌ No valid build numbers found!"
-            echo "     Fallback recommendation: Use 100 as safe starting point"
-          fi
-          
-          echo ""
-          echo "💡 RECOMMENDATIONS:"
-          if [ "$HIGHEST_BUILD" -lt 10 ] && [ "$HIGHEST_BUILD" -gt 0 ]; then
-            echo "  - Add safety buffer: next build = $((HIGHEST_BUILD + 50))"
-            echo "  - This avoids conflicts with 'reserved' build numbers"
-          elif [ "$HIGHEST_BUILD" -gt 0 ]; then
-            echo "  - Use store-first approach: next build = $NEXT_BUILD"
-            echo "  - This should avoid version conflicts"
-          else
-            echo "  - Fallback to safe number: use 100 as starting point"
-            echo "  - Debug API key permissions and bundle ID"
-          fi
-          
-          echo ""
-          echo "🧹 Cleaning up..."
-          rm -rf ./fastlane
-          rm -f /tmp/testflight.txt /tmp/appstore.txt /tmp/builds.txt
-          
-          echo "✅ Test complete!"
+          echo "🧹 Cleanup..."
+          rm -rf ./fastlane /tmp/*.txt
+          echo "✅ Debug complete!"

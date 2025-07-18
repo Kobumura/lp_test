@@ -63,14 +63,14 @@ jobs:
             TARGET_REF="${{ github.event.client_payload.ref || 'main' }}"
             TARGET_SHA="${{ github.event.client_payload.sha || '' }}"
             TRIGGER_ACTOR="${{ github.event.client_payload.trigger_actor || 'repository_dispatch' }}"
-            PLATFORM="${{ github.event.client_payload.platform || 'both' }}"
-            SPEED="${{ github.event.client_payload.speed || 'github' }}"
-            RUN_UI_TESTS="${{ github.event.client_payload.run_ui_tests || 'true' }}"
-            RUN_UNIT_TESTS="${{ github.event.client_payload.run_unit_tests || 'true' }}"
-            RUN_BUILD="${{ github.event.client_payload.run_build || 'true' }}"
-            TRACK="${{ github.event.client_payload.track || 'internal' }}"
-            FAIL_FAST="${{ github.event.client_payload.fail_fast || 'true' }}"
-            DEV_MODE="${{ github.event.client_payload.dev_mode || 'true' }}"
+            PLATFORM="${{ github.event.client_payload.build_config.platform || 'both' }}"
+            SPEED="${{ github.event.client_payload.build_config.speed || 'github' }}"
+            RUN_UI_TESTS="${{ github.event.client_payload.build_config.run_ui_tests || 'true' }}"
+            RUN_UNIT_TESTS="${{ github.event.client_payload.build_config.run_unit_tests || 'true' }}"
+            RUN_BUILD="${{ github.event.client_payload.build_config.run_build || 'true' }}"
+            TRACK="${{ github.event.client_payload.build_config.track || 'internal' }}"
+            FAIL_FAST="${{ github.event.client_payload.build_config.fail_fast || 'true' }}"
+            DEV_MODE="${{ github.event.client_payload.build_config.dev_mode || 'true' }}"
             # App configuration from payload
             IOS_BUNDLE_ID="${{ github.event.client_payload.app_config.ios_bundle_id || 'com.example.app' }}"
             IOS_SCHEME="${{ github.event.client_payload.app_config.ios_scheme || 'App' }}"
@@ -246,7 +246,7 @@ jobs:
       - name: Install Fastlane
         run: |
           echo "📦 Installing Fastlane for App Store Connect queries..."
-          gem install fastlane
+          sudo gem install fastlane
           echo "✅ Fastlane installed"
 
       - name: Setup App Store Connect API Key

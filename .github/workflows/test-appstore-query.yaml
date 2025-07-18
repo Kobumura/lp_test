@@ -60,8 +60,8 @@ jobs:
         run: |
           echo "📦 Installing Fastlane..."
           
-          # Install with verbose output to catch any issues
-          gem install fastlane --no-document --verbose
+          # Install with sudo to fix permission issues
+          sudo gem install fastlane --no-document
           
           echo "✅ Fastlane installation complete"
           fastlane --version

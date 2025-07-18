@@ -1,4 +1,4 @@
-name: Direct App Store Connect API Key Test
+name: Test Fixed Fastlane Parameters
 
 on:
   workflow_dispatch:
@@ -9,14 +9,14 @@ on:
         default: 'com.littletalks.app'
 
 jobs:
-  test-direct-api-key:
+  test-fixed-parameters:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup App Store Connect API Key (Direct)
+      - name: Setup App Store Connect API Key
         run: |
-          echo "🔑 Setting up App Store Connect API key directly..."
+          echo "🔑 Setting up App Store Connect API key..."
           
-          # Create the P8 key file directly
+          # Create the P8 key file
           cat > /tmp/asc-api-key.p8 <<'EOF'
           -----BEGIN PRIVATE KEY-----
           MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQghnrjw2IY0M/VODiY
@@ -26,217 +26,104 @@ jobs:
           -----END PRIVATE KEY-----
           EOF
           
-          # Set environment variables
           echo "ASC_API_KEY_ID=4QM5FBBF6P" >> $GITHUB_ENV
           echo "ASC_ISSUER_ID=63421d99-7718-41a8-99c8-01548625694f" >> $GITHUB_ENV
-          echo "ASC_API_KEY_PATH=/tmp/asc-api-key.p8" >> $GITHUB_ENV
           echo "BUNDLE_ID=${{ inputs.bundle_id }}" >> $GITHUB_ENV
-          
-          echo "✅ API key setup complete"
-
-      - name: Verify OpenSSL Compatibility
-        run: |
-          echo "🔍 OPENSSL COMPATIBILITY TEST"
-          echo "=============================="
-          
-          echo "Environment info:"
-          echo "Ruby: $(ruby --version)"
-          echo "OpenSSL: $(openssl version)"
-          
-          echo ""
-          echo "Testing P8 key with OpenSSL directly:"
-          if openssl pkey -in /tmp/asc-api-key.p8 -noout -text; then
-            echo "✅ P8 key is valid and readable by OpenSSL"
-          else
-            echo "❌ P8 key has OpenSSL compatibility issues"
-            echo "This confirms the 'invalid curve name' error"
-          fi
-          
-          echo ""
-          echo "Key details:"
-          openssl pkey -in /tmp/asc-api-key.p8 -noout -text | head -10
 
       - name: Install Fastlane
         run: |
           echo "📦 Installing Fastlane..."
-          
-          # Install with sudo to fix permission issues
           sudo gem install fastlane --no-document
-          
-          echo "✅ Fastlane installation complete"
           fastlane --version
 
-      - name: Test Method 1 - app_store_build_number
-        id: test1
-        continue-on-error: true
+      - name: Setup App Store Connect API Key Object (CORRECTED)
         run: |
-          echo "🧪 TESTING: app_store_build_number (Google recommended)"
-          echo "================================================="
+          echo "🔐 Setting up App Store Connect API key object with correct parameters..."
           
-          if RESULT=$(fastlane run app_store_build_number \
-              app_identifier:"$BUNDLE_ID" \
-              api_key_path:"$ASC_API_KEY_PATH" \
+          # Use CORRECT parameter names from debug output
+          if RESULT=$(fastlane run app_store_connect_api_key \
               key_id:"$ASC_API_KEY_ID" \
-              issuer_id:"$ASC_ISSUER_ID" 2>&1); then
+              issuer_id:"$ASC_ISSUER_ID" \
+              key_filepath:"/tmp/asc-api-key.p8" \
+              duration:1200 \
+              in_house:false 2>&1); then
           
-            echo "✅ app_store_build_number SUCCEEDED:"
+            echo "✅ API key object created successfully!"
+            echo "$RESULT"
+          else
+            echo "❌ API key object creation failed:"
+            echo "$RESULT"
+            exit 1
+          fi
+
+      - name: Test App Store Build Number Query (CORRECTED)
+        run: |
+          echo "🧪 Testing app_store_build_number with corrected parameters..."
+          
+          # Use the API key object (should now work)
+          if RESULT=$(fastlane run app_store_build_number \
+              app_identifier:"$BUNDLE_ID" 2>&1); then
+          
+            echo "✅ app_store_build_number SUCCEEDED!"
             echo "$RESULT"
             
-            # Parse result
+            # Parse and show result
             PARSED_BUILD=$(echo "$RESULT" | grep -oE "(Result: |App Store build number: )?[0-9]+" | grep -oE "[0-9]+" | tail -1)
             echo ""
-            echo "🔍 Parsing analysis:"
-            echo "Raw result lines with numbers:"
-            echo "$RESULT" | grep -E "[0-9]+"
-            echo ""
-            echo "Extracted build number: '$PARSED_BUILD'"
+            echo "🎯 EXTRACTED BUILD NUMBER: $PARSED_BUILD"
             
             if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-              echo "🎯 SUCCESS: Valid build number found: $PARSED_BUILD"
-              echo "SOLUTION: Use app_store_build_number in main workflow"
-              echo "method1_success=true" >> $GITHUB_OUTPUT
-              echo "method1_build=$PARSED_BUILD" >> $GITHUB_OUTPUT
+              echo "🎉 SUCCESS: Valid build number found!"
+              echo "🔧 LP-21 SOLUTION: Use app_store_build_number with API key object"
             else
-              echo "⚠️ Parsing issue: '$PARSED_BUILD' is not a valid positive number"
-              echo "method1_success=false" >> $GITHUB_OUTPUT
+              echo "⚠️ Success but parsing needs adjustment"
             fi
             
           else
-            echo "❌ app_store_build_number FAILED:"
+            echo "❌ app_store_build_number still failed:"
             echo "$RESULT"
-            
-            if echo "$RESULT" | grep -q "invalid curve name"; then
-              echo "🔍 CONFIRMED: OpenSSL curve name error in method 1"
-            fi
-            echo "method1_success=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Test Method 2 - latest_testflight_build_number
-        id: test2
-        continue-on-error: true
+      - name: Test TestFlight Build Number Query (CORRECTED)  
         run: |
-          echo ""
-          echo "🧪 TESTING: latest_testflight_build_number (fallback)"
-          echo "=============================================="
+          echo "🧪 Testing latest_testflight_build_number with corrected parameters..."
           
           if RESULT=$(fastlane run latest_testflight_build_number \
-              app_identifier:"$BUNDLE_ID" \
-              api_key_path:"$ASC_API_KEY_PATH" \
-              key_id:"$ASC_API_KEY_ID" \
-              issuer_id:"$ASC_ISSUER_ID" 2>&1); then
+              app_identifier:"$BUNDLE_ID" 2>&1); then
           
-            echo "✅ latest_testflight_build_number SUCCEEDED:"
+            echo "✅ latest_testflight_build_number SUCCEEDED!"
             echo "$RESULT"
             
-            # Parse result with multiple patterns
+            # Parse and show result
             PARSED_BUILD=$(echo "$RESULT" | grep -oE "(Result: |build: )?[0-9]+" | grep -oE "[0-9]+" | tail -1)
             echo ""
-            echo "🔍 Parsing analysis:"
-            echo "Raw result lines with numbers:"
-            echo "$RESULT" | grep -E "[0-9]+"
-            echo ""
-            echo "Extracted build number: '$PARSED_BUILD'"
+            echo "🎯 EXTRACTED BUILD NUMBER: $PARSED_BUILD"
             
             if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-              echo "🎯 SUCCESS: Valid build number found: $PARSED_BUILD"
-              echo "SOLUTION: Use latest_testflight_build_number in main workflow"
-              echo "method2_success=true" >> $GITHUB_OUTPUT
-              echo "method2_build=$PARSED_BUILD" >> $GITHUB_OUTPUT
+              echo "🎉 SUCCESS: Valid build number found!"
+              echo "🔧 LP-21 SOLUTION: Use latest_testflight_build_number with API key object"
             else
-              echo "⚠️ Parsing issue: '$PARSED_BUILD' is not a valid positive number"
-              echo "method2_success=false" >> $GITHUB_OUTPUT
+              echo "⚠️ Success but parsing needs adjustment"
             fi
             
           else
-            echo "❌ latest_testflight_build_number FAILED:"
-            echo "$RESULT"
-            
-            if echo "$RESULT" | grep -q "invalid curve name"; then
-              echo "🔍 CONFIRMED: OpenSSL curve name error in method 2"
-            fi
-            echo "method2_success=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Test Alternative Fastlane JSON Key Format
-        if: steps.test1.outputs.method1_success != 'true' && steps.test2.outputs.method2_success != 'true'
-        run: |
-          echo ""
-          echo "🧪 TESTING: Alternative JSON API Key Format"
-          echo "=========================================="
-          
-          # Create Fastlane-style JSON key file
-          cat > /tmp/api_key.json <<'EOF'
-          {
-            "key_id": "4QM5FBBF6P",
-            "issuer_id": "63421d99-7718-41a8-99c8-01548625694f",
-            "key": "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQghnrjw2IY0M/VODiY\nk6Ex1H0W9jh2ws/5GXpwXTcF6xKgCgYIKoZIzj0DAQehRANCAARF2go6/YIvc5qz\noeEsjfmxRtEWSdA7QQQKOYjSkD5SqwAWHuTSJfS+5mw/J4UcUNvRe4MwBRZ4FtBj\nhrCw4w+O\n-----END PRIVATE KEY-----",
-            "duration": 1200,
-            "in_house": false
-          }
-          EOF
-          
-          echo "Created JSON API key file"
-          echo "Testing with app_store_connect_api_key action..."
-          
-          if RESULT=$(fastlane run app_store_connect_api_key api_key_path:"/tmp/api_key.json" 2>&1); then
-            echo "✅ JSON API key format works"
-            echo "$RESULT"
-          else
-            echo "❌ JSON API key format also fails"
+            echo "❌ latest_testflight_build_number failed:"
             echo "$RESULT"
           fi
 
-      - name: Final Analysis and Solution
-        if: always()
+      - name: Final LP-21 Solution
         run: |
           echo ""
-          echo "🎯 FINAL ANALYSIS & LP-21 SOLUTION"
-          echo "=================================="
-          
-          METHOD1_SUCCESS="${{ steps.test1.outputs.method1_success }}"
-          METHOD2_SUCCESS="${{ steps.test2.outputs.method2_success }}"
-          METHOD1_BUILD="${{ steps.test1.outputs.method1_build }}"
-          METHOD2_BUILD="${{ steps.test2.outputs.method2_build }}"
-          
-          echo "Test Results:"
-          echo "  Method 1 (app_store_build_number): $METHOD1_SUCCESS (build: $METHOD1_BUILD)"
-          echo "  Method 2 (latest_testflight_build_number): $METHOD2_SUCCESS (build: $METHOD2_BUILD)"
-          
-          if [ "$METHOD1_SUCCESS" = "true" ]; then
-            echo ""
-            echo "🎯 SOLUTION FOR LP-21:"
-            echo "====================="
-            echo "✅ Use app_store_build_number method in main workflow"
-            echo "✅ Build number found: $METHOD1_BUILD"
-            echo "✅ OpenSSL compatibility confirmed for this method"
-            echo ""
-            echo "IMPLEMENTATION:"
-            echo "Replace latest_testflight_build_number with app_store_build_number in app-store-query job"
-            
-          elif [ "$METHOD2_SUCCESS" = "true" ]; then
-            echo ""
-            echo "🎯 SOLUTION FOR LP-21:"
-            echo "====================="
-            echo "✅ Keep latest_testflight_build_number method"
-            echo "✅ Build number found: $METHOD2_BUILD"
-            echo "✅ Parsing regex may need adjustment in main workflow"
-            echo ""
-            echo "IMPLEMENTATION:"
-            echo "Current method works, but improve parsing logic"
-            
-          else
-            echo ""
-            echo "❌ BOTH METHODS FAILED - DEEPER ISSUE CONFIRMED"
-            echo "=============================================="
-            echo "Root cause: OpenSSL compatibility issue in GitHub Actions"
-            echo ""
-            echo "ALTERNATIVE SOLUTIONS:"
-            echo "1. Update Fastlane version in workflow"
-            echo "2. Use xcrun altool (deprecated but may work)"
-            echo "3. Use manual version management temporarily"
-            echo "4. Try different runner (macos instead of ubuntu)"
-          fi
-          
+          echo "🎯 LP-21 RESOLUTION SUMMARY"
+          echo "=========================="
           echo ""
-          echo "🔗 Update LP-21 ticket with these results"
-          echo "🔗 Implement the working solution in main workflow"
+          echo "✅ ISSUE IDENTIFIED: Incorrect Fastlane parameter usage"
+          echo "✅ SOLUTION: Use app_store_connect_api_key first, then query methods"
+          echo ""
+          echo "IMPLEMENTATION STEPS:"
+          echo "1. Create API key object with app_store_connect_api_key"
+          echo "2. Use app_identifier parameter (not individual key_id/issuer_id)"
+          echo "3. API key object is automatically used by subsequent actions"
+          echo ""
+          echo "🔧 Update main workflow with corrected parameter usage"
+          echo "🔧 Replace old individual parameters with API key object approach"

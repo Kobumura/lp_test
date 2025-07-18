@@ -1,4 +1,4 @@
-name: Test App Store Connect Query (Fixed Env Vars)
+name: Test App Store Connect Query (Working Pattern)
 
 on:
   workflow_dispatch:
@@ -10,14 +10,17 @@ on:
 
 jobs:
   app-store-query-test:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     steps:
-      - name: Setup App Store Connect API Key (Fixed Env Handling)
+      - name: Setup App Store Connect API Key (Working Method)
         run: |
-          echo "🔑 Setting up App Store Connect credentials..."
+          echo "🔑 Setting up App Store Connect credentials using working pattern..."
           
-          # Create JSON file with properly escaped key
-          cat > /tmp/asc-api-key.json << 'EOF'
+          # Create ios directory structure (like your working workflow)
+          mkdir -p ios/fastlane
+          
+          # Create the API key JSON in fastlane directory (working approach)
+          cat > ios/fastlane/api_key.json << 'EOF'
           {
             "key_id": "4QM5FBBF6P",
             "issuer_id": "63421d99-7718-41a8-99c8-01548625694f",
@@ -27,130 +30,71 @@ jobs:
           }
           EOF
           
-          # Create P8 file  
-          cat > /tmp/asc-api-key.p8 << 'EOF'
-          -----BEGIN PRIVATE KEY-----
-          MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQghnrjw2IY0M/VODiY
-          k6Ex1H0W9jh2ws/5GXpwXTcF6xKgCgYIKoZIzj0DAQehRANCAARF2go6/YIvc5qz
-          oeEsjfmxRtEWSdA7QQQKOYjSkD5SqwAWHuTSJfS+5mw/J4UcUNvRe4MwBRZ4FtBj
-          hrCw4w+O
-          -----END PRIVATE KEY-----
-          EOF
-          
-          # Set only simple environment variables (no multi-line)
           echo "BUNDLE_ID=${{ inputs.ios_bundle_id }}" >> $GITHUB_ENV
-          echo "ASC_API_KEY_ID=4QM5FBBF6P" >> $GITHUB_ENV
-          echo "ASC_ISSUER_ID=63421d99-7718-41a8-99c8-01548625694f" >> $GITHUB_ENV
-          
-          # Set Fastlane auto-pickup environment variables (using base64 to avoid newlines)
-          echo "APP_STORE_CONNECT_API_KEY_KEY_ID=4QM5FBBF6P" >> $GITHUB_ENV
-          echo "APP_STORE_CONNECT_API_KEY_ISSUER_ID=63421d99-7718-41a8-99c8-01548625694f" >> $GITHUB_ENV
-          
-          # Base64 encode the key to avoid newline issues
-          KEY_BASE64=$(base64 -w 0 /tmp/asc-api-key.p8)
-          echo "ASC_KEY_BASE64=$KEY_BASE64" >> $GITHUB_ENV
-          
-          echo "✅ API key setup complete"
+          echo "✅ API key setup complete in proper directory structure"
 
       - name: Install Fastlane
         run: |
           echo "📦 Installing Fastlane..."
-          sudo gem install fastlane --no-document
+          gem install fastlane --no-document
           echo "✅ Fastlane installed"
           fastlane --version
 
-      - name: Test App Store Connect Methods (Fixed)
+      - name: Test App Store Connect Query (Working Directory Structure)
+        working-directory: ios
         run: |
-          echo "🔍 Testing App Store Connect methods..."
+          echo "🔍 Testing App Store Connect query with proper structure..."
+          echo "📋 Bundle ID: $BUNDLE_ID"
+          echo "📁 Working directory: $(pwd)"
+          echo "📁 Fastlane directory exists: $(ls -la fastlane/)"
           
-          # Create Fastfile with proper approaches
-          cat > Fastfile << 'EOF'
+          # Create Fastfile in ios/fastlane directory (proper structure)
+          cat > fastlane/Fastfile << 'EOF'
           default_platform(:ios)
           
           platform :ios do
-            desc "Test App Store Connect methods"
-            lane :test_methods do
-              puts "=== Testing App Store Connect Methods ==="
+            desc "Query App Store Connect for build number"
+            lane :query_build_number do
+              puts "=== App Store Connect Build Number Query ==="
               puts "Bundle ID: #{ENV['BUNDLE_ID']}"
               
-              # Method 1: JSON file (most reliable)
-              puts "\n=== METHOD 1: JSON File ==="
               begin
-                build_num = app_store_build_number(
-                  api_key_path: "/tmp/asc-api-key.json",
-                  app_identifier: ENV["BUNDLE_ID"]
-                )
-                puts "JSON_SUCCESS:#{build_num}"
-              rescue => e
-                puts "JSON_ERROR:#{e.message}"
-              end
-              
-              # Method 2: Create API key from base64
-              puts "\n=== METHOD 2: Base64 Key ==="
-              begin
-                require 'base64'
-                key_content = Base64.decode64(ENV["ASC_KEY_BASE64"])
-                
-                api_key = app_store_connect_api_key(
-                  key_id: ENV["ASC_API_KEY_ID"],
-                  issuer_id: ENV["ASC_ISSUER_ID"],
-                  key: key_content,
-                  duration: 1200,
-                  in_house: false
-                )
-                
-                build_num = app_store_build_number(
-                  api_key: api_key,
-                  app_identifier: ENV["BUNDLE_ID"]
-                )
-                puts "BASE64_SUCCESS:#{build_num}"
-              rescue => e
-                puts "BASE64_ERROR:#{e.message}"
-              end
-              
-              # Method 3: TestFlight with JSON
-              puts "\n=== METHOD 3: TestFlight JSON ==="
-              begin
+                # Method 1: Using your working pattern with api_key.json
                 build_num = latest_testflight_build_number(
-                  api_key_path: "/tmp/asc-api-key.json",
+                  api_key_path: "fastlane/api_key.json",
                   app_identifier: ENV["BUNDLE_ID"]
                 )
-                puts "TESTFLIGHT_SUCCESS:#{build_num}"
+                puts "LATEST_TESTFLIGHT_SUCCESS:#{build_num}"
               rescue => e
-                puts "TESTFLIGHT_ERROR:#{e.message}"
+                puts "LATEST_TESTFLIGHT_ERROR:#{e.message}"
+                puts "Error details: #{e.backtrace.first(3).join(', ')}"
               end
               
-              # Method 4: TestFlight with base64 key
-              puts "\n=== METHOD 4: TestFlight Base64 ==="
               begin
-                require 'base64'
-                key_content = Base64.decode64(ENV["ASC_KEY_BASE64"])
-                
+                # Method 2: Alternative approach with explicit API key creation
                 api_key = app_store_connect_api_key(
-                  key_id: ENV["ASC_API_KEY_ID"],
-                  issuer_id: ENV["ASC_ISSUER_ID"],
-                  key: key_content,
-                  duration: 1200,
-                  in_house: false
+                  key_id: "4QM5FBBF6P",
+                  issuer_id: "63421d99-7718-41a8-99c8-01548625694f",
+                  key_filepath: "fastlane/api_key.json"
                 )
                 
                 build_num = latest_testflight_build_number(
                   api_key: api_key,
                   app_identifier: ENV["BUNDLE_ID"]
                 )
-                puts "TESTFLIGHT_BASE64_SUCCESS:#{build_num}"
+                puts "EXPLICIT_API_KEY_SUCCESS:#{build_num}"
               rescue => e
-                puts "TESTFLIGHT_BASE64_ERROR:#{e.message}"
+                puts "EXPLICIT_API_KEY_ERROR:#{e.message}"
               end
               
-              puts "=== All Methods Tested ==="
+              puts "=== Query Complete ==="
             end
           end
           EOF
           
-          echo "🚀 Running method tests..."
+          echo "🚀 Running Fastlane with proper structure..."
           
-          if OUTPUT=$(fastlane test_methods 2>&1); then
+          if OUTPUT=$(fastlane query_build_number 2>&1); then
             echo "✅ Fastlane completed"
           else
             echo "⚠️ Fastlane had issues but continuing..."
@@ -167,19 +111,29 @@ jobs:
           SUCCESS_COUNT=0
           WORKING_METHODS=()
           
-          for method in "JSON" "BASE64" "TESTFLIGHT" "TESTFLIGHT_BASE64"; do
-            if echo "$OUTPUT" | grep -q "${method}_SUCCESS:"; then
-              BUILD_NUM=$(echo "$OUTPUT" | grep "${method}_SUCCESS:" | sed "s/.*${method}_SUCCESS://" | tr -d ' ' | head -1)
-              if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] && [ "$BUILD_NUM" -gt 0 ]; then
-                echo "🎯 $method SUCCESS: Build $BUILD_NUM"
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                WORKING_METHODS+=("$method")
-              fi
-            elif echo "$OUTPUT" | grep -q "${method}_ERROR:"; then
-              ERROR_MSG=$(echo "$OUTPUT" | grep "${method}_ERROR:" | sed "s/.*${method}_ERROR://" | head -1)
-              echo "❌ $method ERROR: $ERROR_MSG"
+          if echo "$OUTPUT" | grep -q "LATEST_TESTFLIGHT_SUCCESS:"; then
+            BUILD_NUM=$(echo "$OUTPUT" | grep "LATEST_TESTFLIGHT_SUCCESS:" | sed 's/.*LATEST_TESTFLIGHT_SUCCESS://' | tr -d ' ')
+            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] && [ "$BUILD_NUM" -gt 0 ]; then
+              echo "🎯 LATEST_TESTFLIGHT SUCCESS: Build $BUILD_NUM"
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              WORKING_METHODS+=("latest_testflight_build_number")
             fi
-          done
+          elif echo "$OUTPUT" | grep -q "LATEST_TESTFLIGHT_ERROR:"; then
+            ERROR_MSG=$(echo "$OUTPUT" | grep "LATEST_TESTFLIGHT_ERROR:" | sed 's/.*LATEST_TESTFLIGHT_ERROR://')
+            echo "❌ LATEST_TESTFLIGHT ERROR: $ERROR_MSG"
+          fi
+          
+          if echo "$OUTPUT" | grep -q "EXPLICIT_API_KEY_SUCCESS:"; then
+            BUILD_NUM=$(echo "$OUTPUT" | grep "EXPLICIT_API_KEY_SUCCESS:" | sed 's/.*EXPLICIT_API_KEY_SUCCESS://' | tr -d ' ')
+            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] && [ "$BUILD_NUM" -gt 0 ]; then
+              echo "🎯 EXPLICIT_API_KEY SUCCESS: Build $BUILD_NUM"
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              WORKING_METHODS+=("explicit_api_key")
+            fi
+          elif echo "$OUTPUT" | grep -q "EXPLICIT_API_KEY_ERROR:"; then
+            ERROR_MSG=$(echo "$OUTPUT" | grep "EXPLICIT_API_KEY_ERROR:" | sed 's/.*EXPLICIT_API_KEY_ERROR://')
+            echo "❌ EXPLICIT_API_KEY ERROR: $ERROR_MSG"
+          fi
           
           echo ""
           echo "🎯 FINAL RESULTS"
@@ -187,38 +141,48 @@ jobs:
           if [ "$SUCCESS_COUNT" -gt 0 ]; then
             echo "✅ LP-21 RESOLVED: $SUCCESS_COUNT method(s) working!"
             echo "✅ Working methods: ${WORKING_METHODS[*]}"
-            echo "✅ Can implement in main workflow using working method"
+            echo "✅ Directory structure and API approach confirmed working"
+            echo ""
+            echo "🔧 IMPLEMENTATION FOR MAIN WORKFLOW:"
+            echo "1. Use 'latest_testflight_build_number' action"
+            echo "2. Create api_key.json in ios/fastlane/ directory"
+            echo "3. Run from ios/ working directory"
+            echo "4. Use proper Fastfile structure in ios/fastlane/"
           else
             echo "❌ LP-21 PERSISTENT ISSUE: All methods failed"
-            echo "❌ May need to investigate App Store Connect access or API key permissions"
+            echo "❌ Check API key permissions or App Store Connect access"
           fi
 
-      - name: Validate Setup
+      - name: Validate Working Structure
+        working-directory: ios
         if: always()
         run: |
           echo ""
-          echo "🔍 SETUP VALIDATION"
-          echo "==================="
+          echo "🔍 DIRECTORY STRUCTURE VALIDATION"
+          echo "================================="
           
-          echo "Files created:"
-          ls -la /tmp/asc-api-key.*
-          
+          echo "Current working directory: $(pwd)"
           echo ""
-          echo "JSON validation:"
-          if python3 -c "import json; json.load(open('/tmp/asc-api-key.json'))" 2>/dev/null; then
-            echo "✅ JSON file is valid"
+          echo "fastlane/ directory contents:"
+          ls -la fastlane/ || echo "No fastlane directory"
+          echo ""
+          echo "API key file validation:"
+          if [ -f "fastlane/api_key.json" ]; then
+            echo "✅ api_key.json exists"
+            if python3 -c "import json; json.load(open('fastlane/api_key.json'))" 2>/dev/null; then
+              echo "✅ api_key.json is valid JSON"
+            else
+              echo "❌ api_key.json is invalid JSON"
+            fi
           else
-            echo "❌ JSON file is invalid"
+            echo "❌ api_key.json not found"
           fi
-          
           echo ""
-          echo "P8 validation:"
-          if openssl pkey -in /tmp/asc-api-key.p8 -noout 2>/dev/null; then
-            echo "✅ P8 file is valid"
+          echo "Fastfile validation:"
+          if [ -f "fastlane/Fastfile" ]; then
+            echo "✅ Fastfile exists"
+            echo "First few lines:"
+            head -5 fastlane/Fastfile
           else
-            echo "❌ P8 file is invalid"
+            echo "❌ Fastfile not found"
           fi
-          
-          echo ""
-          echo "Environment variables (count):"
-          env | grep -c "ASC_\|APP_STORE_" || echo "No ASC env vars found"

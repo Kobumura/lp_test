@@ -1,32 +1,36 @@
-# App Store Connect Query (Fixed for OpenSSL Compatibility)
-  app-store-query:
+name: Debug App Store Connect API
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: 'iOS Bundle ID to test'
+        required: true
+        default: 'com.littletalks.app'
+      test_method:
+        description: 'Test method to use'
+        type: choice
+        options: [all, app_store_build_number, latest_testflight_build_number]
+        default: 'all'
+
+jobs:
+  debug-app-store-api:
     runs-on: ubuntu-latest
-    needs: setup
-    if: needs.setup.outputs.build_ios == 'true'
-    outputs:
-      latest_build_number: ${{ steps.query.outputs.build_number }}
-      query_success: ${{ steps.query.outputs.success }}
-      query_method: ${{ steps.query.outputs.method }}
     steps:
       - name: Prepare App Store Connect Credentials
         env:
-          ASC_API_KEY_ID: ${{ github.event.client_payload.secrets.ASC_API_KEY_ID || secrets.ASC_API_KEY_ID }}
-          ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
-          ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
-          ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           echo "🔑 Setting up App Store Connect credentials..."
           
-          if [ -n "$ASC_API_KEY_P8_B64" ]; then
-            echo "🔑 Using App Store Connect key from repository dispatch (base64)"
-            echo "$ASC_API_KEY_P8_B64" | base64 -d > /tmp/asc-api-key.p8
-          elif [ -n "$ASC_API_KEY_P8_REPO" ]; then
-            echo "🔑 Using App Store Connect key from repository secrets (direct)"
-            echo "$ASC_API_KEY_P8_REPO" > /tmp/asc-api-key.p8
-          else
-            echo "❌ No App Store Connect API key available"
+          if [ -z "$ASC_API_KEY_P8" ]; then
+            echo "❌ ASC_API_KEY_P8 secret not found"
             exit 1
           fi
+          
+          echo "$ASC_API_KEY_P8" > /tmp/asc-api-key.p8
           
           # Verify the P8 file is valid
           echo "🔍 Validating P8 file..."
@@ -34,109 +38,143 @@
             echo "✅ P8 file appears valid"
           else
             echo "❌ P8 file is invalid or corrupted"
+            head -3 /tmp/asc-api-key.p8
             exit 1
           fi
           
-          # Set environment variables for Fastlane
           echo "ASC_API_KEY_ID=$ASC_API_KEY_ID" >> $GITHUB_ENV
           echo "ASC_ISSUER_ID=$ASC_ISSUER_ID" >> $GITHUB_ENV
           echo "ASC_API_KEY_PATH=/tmp/asc-api-key.p8" >> $GITHUB_ENV
 
-      - name: Install Fastlane (OpenSSL Compatibility Mode)
+      - name: Install Fastlane (Multiple Methods)
         run: |
           echo "📦 Installing Fastlane with OpenSSL compatibility..."
           
-          # Try multiple installation methods for better compatibility
+          # Method 1: Standard gem install
           if gem install fastlane --no-document; then
-            echo "✅ Fastlane installed successfully"
+            echo "✅ Fastlane installed successfully via gem"
           else
-            echo "⚠️ Standard gem install failed, trying alternative..."
+            echo "⚠️ Standard gem install failed, trying sudo..."
             sudo gem install fastlane --no-document
           fi
           
           # Verify installation
           echo "🔧 Verifying Fastlane installation:"
           fastlane --version
+          
+          # Check Ruby and OpenSSL versions
+          echo "🔍 Environment info:"
+          echo "Ruby: $(ruby --version)"
+          echo "OpenSSL: $(openssl version)"
 
-      - name: Query App Store Connect (Multiple Methods)
-        id: query
+      - name: Test App Store Connect API (Multiple Methods)
         run: |
-          echo "🔍 Querying App Store Connect for latest build number..."
-          echo "📋 Bundle ID: ${{ github.event.client_payload.app_config.ios_bundle_id || secrets.IOS_BUNDLE_ID }}"
+          echo "🔍 Testing App Store Connect API..."
+          echo "📋 Bundle ID: ${{ inputs.bundle_id }}"
+          echo "📋 Test Method: ${{ inputs.test_method }}"
           
-          BUNDLE_ID="${{ github.event.client_payload.app_config.ios_bundle_id || secrets.IOS_BUNDLE_ID }}"
-          LATEST_BUILD="0"
-          SUCCESS="false"
-          METHOD="none"
+          BUNDLE_ID="${{ inputs.bundle_id }}"
+          TEST_METHOD="${{ inputs.test_method }}"
           
-          # Method 1: Try app_store_build_number (recommended by Google search)
-          echo "🧪 METHOD 1: Using app_store_build_number (Google recommended)..."
-          if RESULT=$(fastlane run app_store_build_number \
-              app_identifier:"$BUNDLE_ID" \
-              api_key_path:"$ASC_API_KEY_PATH" \
-              key_id:"$ASC_API_KEY_ID" \
-              issuer_id:"$ASC_ISSUER_ID" 2>&1); then
-          
-            echo "✅ Method 1 succeeded:"
-            echo "$RESULT"
-          
-            # Parse the successful result (look for "Result:" or any number)
-            PARSED_BUILD=$(echo "$RESULT" | grep -oE "(Result: |App Store build number: )?[0-9]+" | grep -oE "[0-9]+" | tail -1)
-            if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-              LATEST_BUILD="$PARSED_BUILD"
-              SUCCESS="true"
-              METHOD="app_store_build_number"
+          # Test Method 1: app_store_build_number
+          if [[ "$TEST_METHOD" == "all" || "$TEST_METHOD" == "app_store_build_number" ]]; then
+            echo ""
+            echo "🧪 TEST 1: app_store_build_number (Google recommended)"
+            echo "=========================================="
+            
+            if RESULT=$(fastlane run app_store_build_number \
+                app_identifier:"$BUNDLE_ID" \
+                api_key_path:"$ASC_API_KEY_PATH" \
+                key_id:"$ASC_API_KEY_ID" \
+                issuer_id:"$ASC_ISSUER_ID" 2>&1); then
+            
+              echo "✅ app_store_build_number succeeded:"
+              echo "$RESULT"
+              echo ""
+              echo "🔍 Parsing result..."
+              PARSED_BUILD=$(echo "$RESULT" | grep -oE "(Result: |App Store build number: )?[0-9]+" | grep -oE "[0-9]+" | tail -1)
+              echo "Extracted build number: $PARSED_BUILD"
+              
+            else
+              echo "❌ app_store_build_number failed:"
+              echo "$RESULT"
             fi
-          else
-            echo "❌ Method 1 failed:"
-            echo "$RESULT"
           fi
           
-          # Method 2: Try latest_testflight_build_number (if Method 1 failed)
-          if [ "$SUCCESS" = "false" ]; then
-            echo "🧪 METHOD 2: Using latest_testflight_build_number (fallback)..."
+          # Test Method 2: latest_testflight_build_number
+          if [[ "$TEST_METHOD" == "all" || "$TEST_METHOD" == "latest_testflight_build_number" ]]; then
+            echo ""
+            echo "🧪 TEST 2: latest_testflight_build_number (fallback)"
+            echo "============================================="
+            
             if RESULT=$(fastlane run latest_testflight_build_number \
                 app_identifier:"$BUNDLE_ID" \
                 api_key_path:"$ASC_API_KEY_PATH" \
                 key_id:"$ASC_API_KEY_ID" \
                 issuer_id:"$ASC_ISSUER_ID" 2>&1); then
             
-              echo "✅ Method 2 succeeded:"
+              echo "✅ latest_testflight_build_number succeeded:"
               echo "$RESULT"
-            
-              # Parse with improved regex
+              echo ""
+              echo "🔍 Parsing result..."
               PARSED_BUILD=$(echo "$RESULT" | grep -oE "(Result: |build: )?[0-9]+" | grep -oE "[0-9]+" | tail -1)
-              if [[ "$PARSED_BUILD" =~ ^[0-9]+$ ]] && [ "$PARSED_BUILD" -gt 0 ]; then
-                LATEST_BUILD="$PARSED_BUILD"
-                SUCCESS="true"
-                METHOD="latest_testflight_build_number"
-              fi
+              echo "Extracted build number: $PARSED_BUILD"
+              
             else
-              echo "❌ Method 2 failed:"
+              echo "❌ latest_testflight_build_number failed:"
               echo "$RESULT"
             fi
           fi
           
-          # Method 3: Try with username authentication (if API key methods fail)
-          if [ "$SUCCESS" = "false" ]; then
-            echo "🧪 METHOD 3: Attempting username-based query (last resort)..."
-            echo "⚠️ This method may prompt for credentials and is not recommended for CI"
-            # Skip this method for now in CI environment
-            echo "Skipping username method in CI environment"
+          echo ""
+          echo "🔍 SUMMARY"
+          echo "=========="
+          echo "If both methods failed with 'invalid curve name', the issue is OpenSSL compatibility."
+          echo "If one method succeeded, use that method in the main workflow."
+          echo "If parsing shows '0' despite success, the regex needs adjustment."
+
+      - name: Test Alternative API Key Format
+        if: always()
+        run: |
+          echo ""
+          echo "🧪 TEST 3: Alternative API Key Setup"
+          echo "===================================="
+          
+          # Try creating API key JSON format
+          cat > /tmp/api_key.json <<EOF
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID",
+            "key_filepath": "/tmp/asc-api-key.p8"
+          }
+          EOF
+          
+          echo "Created JSON API key configuration"
+          echo "This can be used as alternative if direct parameters fail"
+
+      - name: OpenSSL Debugging
+        if: always()
+        run: |
+          echo ""
+          echo "🔍 OPENSSL DEBUGGING"
+          echo "==================="
+          
+          # Check OpenSSL curves
+          echo "Available elliptic curves:"
+          openssl ecparam -list_curves | head -10
+          
+          # Check if P8 file can be read by OpenSSL
+          echo ""
+          echo "Testing P8 file with OpenSSL:"
+          if openssl pkey -in /tmp/asc-api-key.p8 -noout 2>&1; then
+            echo "✅ P8 file is valid for OpenSSL"
+          else
+            echo "❌ P8 file has OpenSSL compatibility issues"
           fi
           
-          # Final result
-          echo "📋 Final App Store Connect Query Result:"
-          echo "  Latest Build: $LATEST_BUILD"
-          echo "  Success: $SUCCESS"
-          echo "  Method Used: $METHOD"
-          
-          echo "build_number=$LATEST_BUILD" >> $GITHUB_OUTPUT
-          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-          echo "method=$METHOD" >> $GITHUB_OUTPUT
-          
-          # If all methods failed, warn but don't fail the job
-          if [ "$SUCCESS" = "false" ]; then
-            echo "⚠️ All App Store Connect query methods failed"
-            echo "📱 iOS build will use fallback version logic"
-          fi
+          echo ""
+          echo "🎯 NEXT STEPS:"
+          echo "1. If both Fastlane methods failed with 'invalid curve name' → OpenSSL issue confirmed"
+          echo "2. Try updating Fastlane version in main workflow"
+          echo "3. Consider using xcrun altool as alternative (deprecated but may work)"
+          echo "4. Check if App Store Connect API key was generated correctly"

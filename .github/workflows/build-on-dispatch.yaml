@@ -72,11 +72,11 @@ jobs:
             FAIL_FAST="${{ github.event.client_payload.fail_fast || 'true' }}"
             DEV_MODE="${{ github.event.client_payload.dev_mode || 'true' }}"
             # App configuration from payload
-            IOS_BUNDLE_ID="${{ github.event.client_payload.ios_bundle_id || 'com.example.app' }}"
-            IOS_SCHEME="${{ github.event.client_payload.ios_scheme || 'App' }}"
-            IOS_WORKSPACE="${{ github.event.client_payload.ios_workspace || 'App.xcworkspace' }}"
-            ANDROID_PACKAGE_NAME="${{ github.event.client_payload.android_package_name || 'com.example.app' }}"
-            APPLE_TEAM_ID="${{ github.event.client_payload.apple_team_id || '' }}"
+            IOS_BUNDLE_ID="${{ github.event.client_payload.app_config.ios_bundle_id || 'com.example.app' }}"
+            IOS_SCHEME="${{ github.event.client_payload.app_config.ios_scheme || 'App' }}"
+            IOS_WORKSPACE="${{ github.event.client_payload.app_config.ios_workspace || 'App.xcworkspace' }}"
+            ANDROID_PACKAGE_NAME="${{ github.event.client_payload.app_config.android_package_name || 'com.example.app' }}"
+            APPLE_TEAM_ID="${{ github.event.client_payload.app_config.apple_team_id || '' }}"
           else
             TARGET_REPO="${{ inputs.target_repo }}"
             TARGET_REF="main"

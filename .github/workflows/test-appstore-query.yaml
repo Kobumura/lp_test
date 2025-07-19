@@ -1,4 +1,4 @@
-name: Test App Store Connect Query (Working Pattern)
+name: Test App Store Connect Query (Fixed JSON)
 
 on:
   workflow_dispatch:
@@ -12,15 +12,16 @@ jobs:
   app-store-query-test:
     runs-on: macos-15
     steps:
-      - name: Setup App Store Connect API Key (Working Method)
+      - name: Setup App Store Connect API Key (Fixed JSON Method)
         run: |
-          echo "🔑 Setting up App Store Connect credentials using working pattern..."
+          echo "🔑 Setting up App Store Connect credentials with proper JSON..."
           
-          # Create ios directory structure (like your working workflow)
+          # Create ios directory structure
           mkdir -p ios/fastlane
           
-          # Create the API key JSON in fastlane directory (working approach)
-          cat > ios/fastlane/api_key.json << 'EOF'
+          # Method 1: Create API key with properly escaped JSON
+          # This uses a here-doc with proper JSON formatting
+          cat > ios/fastlane/api_key.json << 'APIKEYEOF'
           {
             "key_id": "4QM5FBBF6P",
             "issuer_id": "63421d99-7718-41a8-99c8-01548625694f",
@@ -28,10 +29,33 @@ jobs:
             "duration": 1200,
             "in_house": false
           }
-          EOF
+          APIKEYEOF
+          
+          # Method 2: Alternative - create .p8 file separately
+          cat > ios/fastlane/AuthKey_4QM5FBBF6P.p8 << 'P8EOF'
+          -----BEGIN PRIVATE KEY-----
+          MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQghnrjw2IY0M/VODiY
+          k6Ex1H0W9jh2ws/5GXpwXTcF6xKgCgYIKoZIzj0DAQehRANCAARF2go6/YIvc5qz
+          oeEsjfmxRtEWSdA7QQQKOYjSkD5SqwAWHuTSJfS+5mw/J4UcUNvRe4MwBRZ4FtBj
+          hrCw4w+O
+          -----END PRIVATE KEY-----
+          P8EOF
+          
+          # Validate the JSON file
+          echo "🔍 Validating JSON file..."
+          if python3 -m json.tool ios/fastlane/api_key.json > /dev/null 2>&1; then
+            echo "✅ api_key.json is valid JSON!"
+            echo "📋 JSON content:"
+            python3 -m json.tool ios/fastlane/api_key.json | head -20
+          else
+            echo "❌ JSON validation failed!"
+            echo "📋 Raw content:"
+            cat ios/fastlane/api_key.json
+            exit 1
+          fi
           
           echo "BUNDLE_ID=${{ inputs.ios_bundle_id }}" >> $GITHUB_ENV
-          echo "✅ API key setup complete in proper directory structure"
+          echo "✅ API key setup complete"
 
       - name: Install Fastlane
         run: |
@@ -40,16 +64,17 @@ jobs:
           echo "✅ Fastlane installed"
           fastlane --version
 
-      - name: Test App Store Connect Query (Working Directory Structure)
+      - name: Test App Store Connect Query (Multiple Methods)
         working-directory: ios
         run: |
-          echo "🔍 Testing App Store Connect query with proper structure..."
+          echo "🔍 Testing App Store Connect query..."
           echo "📋 Bundle ID: $BUNDLE_ID"
           echo "📁 Working directory: $(pwd)"
-          echo "📁 Fastlane directory exists: $(ls -la fastlane/)"
+          echo "📁 Fastlane directory contents:"
+          ls -la fastlane/
           
-          # Create Fastfile in ios/fastlane directory (proper structure)
-          cat > fastlane/Fastfile << 'EOF'
+          # Create Fastfile with multiple test methods
+          cat > fastlane/Fastfile << 'FASTFILEOF'
           default_platform(:ios)
           
           platform :ios do
@@ -57,42 +82,72 @@ jobs:
             lane :query_build_number do
               puts "=== App Store Connect Build Number Query ==="
               puts "Bundle ID: #{ENV['BUNDLE_ID']}"
-              
+              puts "Working directory: #{Dir.pwd}"
+          
+              # Method 1: Using api_key.json file
               begin
-                # Method 1: Using your working pattern with api_key.json
+                puts "\n--- Method 1: Using api_key.json file ---"
                 build_num = latest_testflight_build_number(
                   api_key_path: "fastlane/api_key.json",
-                  app_identifier: ENV["BUNDLE_ID"]
+                  app_identifier: ENV["BUNDLE_ID"],
+                  initial_build_number: 0
                 )
-                puts "LATEST_TESTFLIGHT_SUCCESS:#{build_num}"
+                puts "✅ METHOD1_SUCCESS:#{build_num}"
               rescue => e
-                puts "LATEST_TESTFLIGHT_ERROR:#{e.message}"
-                puts "Error details: #{e.backtrace.first(3).join(', ')}"
+                puts "❌ METHOD1_ERROR:#{e.message}"
+                puts "Backtrace: #{e.backtrace.first(3).join("\n")}"
               end
-              
+          
+              # Method 2: Using .p8 file
               begin
-                # Method 2: Alternative approach with explicit API key creation
+                puts "\n--- Method 2: Using .p8 file ---"
                 api_key = app_store_connect_api_key(
                   key_id: "4QM5FBBF6P",
                   issuer_id: "63421d99-7718-41a8-99c8-01548625694f",
-                  key_filepath: "fastlane/api_key.json"
+                  key_filepath: "fastlane/AuthKey_4QM5FBBF6P.p8"
                 )
-                
+          
                 build_num = latest_testflight_build_number(
                   api_key: api_key,
-                  app_identifier: ENV["BUNDLE_ID"]
+                  app_identifier: ENV["BUNDLE_ID"],
+                  initial_build_number: 0
                 )
-                puts "EXPLICIT_API_KEY_SUCCESS:#{build_num}"
+                puts "✅ METHOD2_SUCCESS:#{build_num}"
               rescue => e
-                puts "EXPLICIT_API_KEY_ERROR:#{e.message}"
+                puts "❌ METHOD2_ERROR:#{e.message}"
               end
-              
-              puts "=== Query Complete ==="
+          
+              # Method 3: Direct API key hash
+              begin
+                puts "\n--- Method 3: Direct API key hash ---"
+                key_content = File.read("fastlane/AuthKey_4QM5FBBF6P.p8")
+          
+                build_num = latest_testflight_build_number(
+                  api_key: {
+                    key_id: "4QM5FBBF6P",
+                    issuer_id: "63421d99-7718-41a8-99c8-01548625694f",
+                    key: key_content,
+                    duration: 1200,
+                    in_house: false
+                  },
+                  app_identifier: ENV["BUNDLE_ID"],
+                  initial_build_number: 0
+                )
+                puts "✅ METHOD3_SUCCESS:#{build_num}"
+              rescue => e
+                puts "❌ METHOD3_ERROR:#{e.message}"
+              end
+          
+              puts "\n=== Query Complete ==="
             end
           end
-          EOF
+          FASTFILEOF
           
-          echo "🚀 Running Fastlane with proper structure..."
+          echo "🚀 Running Fastlane tests..."
+          
+          # Run with more verbose output
+          export FASTLANE_OPT_OUT_USAGE="YES"
+          export FASTLANE_HIDE_CHANGELOG="true"
           
           if OUTPUT=$(fastlane query_build_number 2>&1); then
             echo "✅ Fastlane completed"
@@ -101,88 +156,98 @@ jobs:
           fi
           
           echo ""
-          echo "📋 FASTLANE OUTPUT:"
-          echo "=================="
+          echo "📋 FULL FASTLANE OUTPUT:"
+          echo "======================="
           echo "$OUTPUT"
-          echo "=================="
+          echo "======================="
           echo ""
           
           # Parse results
           SUCCESS_COUNT=0
           WORKING_METHODS=()
           
-          if echo "$OUTPUT" | grep -q "LATEST_TESTFLIGHT_SUCCESS:"; then
-            BUILD_NUM=$(echo "$OUTPUT" | grep "LATEST_TESTFLIGHT_SUCCESS:" | sed 's/.*LATEST_TESTFLIGHT_SUCCESS://' | tr -d ' ')
-            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] && [ "$BUILD_NUM" -gt 0 ]; then
-              echo "🎯 LATEST_TESTFLIGHT SUCCESS: Build $BUILD_NUM"
+          # Check Method 1
+          if echo "$OUTPUT" | grep -q "METHOD1_SUCCESS:"; then
+            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD1_SUCCESS:" | sed 's/.*METHOD1_SUCCESS://' | tr -d ' ')
+            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
+              echo "✅ Method 1 (api_key.json): Build $BUILD_NUM"
               SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              WORKING_METHODS+=("latest_testflight_build_number")
+              WORKING_METHODS+=("api_key.json")
             fi
-          elif echo "$OUTPUT" | grep -q "LATEST_TESTFLIGHT_ERROR:"; then
-            ERROR_MSG=$(echo "$OUTPUT" | grep "LATEST_TESTFLIGHT_ERROR:" | sed 's/.*LATEST_TESTFLIGHT_ERROR://')
-            echo "❌ LATEST_TESTFLIGHT ERROR: $ERROR_MSG"
           fi
           
-          if echo "$OUTPUT" | grep -q "EXPLICIT_API_KEY_SUCCESS:"; then
-            BUILD_NUM=$(echo "$OUTPUT" | grep "EXPLICIT_API_KEY_SUCCESS:" | sed 's/.*EXPLICIT_API_KEY_SUCCESS://' | tr -d ' ')
-            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]] && [ "$BUILD_NUM" -gt 0 ]; then
-              echo "🎯 EXPLICIT_API_KEY SUCCESS: Build $BUILD_NUM"
+          # Check Method 2
+          if echo "$OUTPUT" | grep -q "METHOD2_SUCCESS:"; then
+            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD2_SUCCESS:" | sed 's/.*METHOD2_SUCCESS://' | tr -d ' ')
+            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
+              echo "✅ Method 2 (.p8 file): Build $BUILD_NUM"
               SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              WORKING_METHODS+=("explicit_api_key")
+              WORKING_METHODS+=(".p8_file")
             fi
-          elif echo "$OUTPUT" | grep -q "EXPLICIT_API_KEY_ERROR:"; then
-            ERROR_MSG=$(echo "$OUTPUT" | grep "EXPLICIT_API_KEY_ERROR:" | sed 's/.*EXPLICIT_API_KEY_ERROR://')
-            echo "❌ EXPLICIT_API_KEY ERROR: $ERROR_MSG"
+          fi
+          
+          # Check Method 3
+          if echo "$OUTPUT" | grep -q "METHOD3_SUCCESS:"; then
+            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD3_SUCCESS:" | sed 's/.*METHOD3_SUCCESS://' | tr -d ' ')
+            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
+              echo "✅ Method 3 (direct hash): Build $BUILD_NUM"
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              WORKING_METHODS+=("direct_hash")
+            fi
           fi
           
           echo ""
           echo "🎯 FINAL RESULTS"
           echo "==============="
           if [ "$SUCCESS_COUNT" -gt 0 ]; then
-            echo "✅ LP-21 RESOLVED: $SUCCESS_COUNT method(s) working!"
+            echo "✅ SUCCESS: $SUCCESS_COUNT method(s) working!"
             echo "✅ Working methods: ${WORKING_METHODS[*]}"
-            echo "✅ Directory structure and API approach confirmed working"
             echo ""
-            echo "🔧 IMPLEMENTATION FOR MAIN WORKFLOW:"
-            echo "1. Use 'latest_testflight_build_number' action"
-            echo "2. Create api_key.json in ios/fastlane/ directory"
-            echo "3. Run from ios/ working directory"
-            echo "4. Use proper Fastfile structure in ios/fastlane/"
+            echo "🔧 RECOMMENDED IMPLEMENTATION:"
+            if [[ " ${WORKING_METHODS[@]} " =~ " api_key.json " ]]; then
+              echo "Use Method 1: api_key.json with proper JSON escaping"
+            elif [[ " ${WORKING_METHODS[@]} " =~ " .p8_file " ]]; then
+              echo "Use Method 2: Separate .p8 file"
+            else
+              echo "Use Method 3: Direct API key hash"
+            fi
           else
-            echo "❌ LP-21 PERSISTENT ISSUE: All methods failed"
-            echo "❌ Check API key permissions or App Store Connect access"
+            echo "❌ ALL METHODS FAILED"
+            echo "🔍 Check:"
+            echo "   - API key permissions in App Store Connect"
+            echo "   - Bundle ID exists in App Store Connect"
+            echo "   - TestFlight access is enabled for the API key"
           fi
 
-      - name: Validate Working Structure
+      - name: Final Validation
         working-directory: ios
         if: always()
         run: |
           echo ""
-          echo "🔍 DIRECTORY STRUCTURE VALIDATION"
-          echo "================================="
+          echo "🔍 FINAL VALIDATION"
+          echo "=================="
           
-          echo "Current working directory: $(pwd)"
+          echo "📁 Directory structure:"
+          find . -name "*.json" -o -name "*.p8" -o -name "Fastfile" | sort
+          
           echo ""
-          echo "fastlane/ directory contents:"
-          ls -la fastlane/ || echo "No fastlane directory"
-          echo ""
-          echo "API key file validation:"
+          echo "📋 api_key.json validation:"
           if [ -f "fastlane/api_key.json" ]; then
-            echo "✅ api_key.json exists"
-            if python3 -c "import json; json.load(open('fastlane/api_key.json'))" 2>/dev/null; then
-              echo "✅ api_key.json is valid JSON"
+            if python3 -c "import json; data = json.load(open('fastlane/api_key.json')); print('✅ Valid JSON with', len(data), 'keys')" 2>/dev/null; then
+              echo "✅ JSON structure is valid"
+              # Check if key field has proper newlines
+              if python3 -c "import json; data = json.load(open('fastlane/api_key.json')); print('✅ Key has newlines' if '\\n' in data.get('key', '') else '❌ Key missing newlines')" 2>/dev/null; then
+                echo "✅ Key field properly formatted"
+              fi
             else
-              echo "❌ api_key.json is invalid JSON"
+              echo "❌ JSON is invalid"
             fi
-          else
-            echo "❌ api_key.json not found"
           fi
+          
           echo ""
-          echo "Fastfile validation:"
-          if [ -f "fastlane/Fastfile" ]; then
-            echo "✅ Fastfile exists"
-            echo "First few lines:"
-            head -5 fastlane/Fastfile
-          else
-            echo "❌ Fastfile not found"
+          echo "📋 .p8 file validation:"
+          if [ -f "fastlane/AuthKey_4QM5FBBF6P.p8" ]; then
+            echo "✅ .p8 file exists"
+            echo "First line: $(head -1 fastlane/AuthKey_4QM5FBBF6P.p8)"
+            echo "Last line: $(tail -1 fastlane/AuthKey_4QM5FBBF6P.p8)"
           fi

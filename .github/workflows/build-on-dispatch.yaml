@@ -977,7 +977,11 @@ jobs:
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
         run: |
-          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+            echo "🔑 Setting up Match certificates for main app..."
+            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+            
+            echo "🔑 Setting up Match certificates for OneSignal extension..."
+            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
 
       - name: Setup App Store Connect API Key
         working-directory: ./private-repo

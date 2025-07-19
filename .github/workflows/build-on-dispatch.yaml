@@ -1026,6 +1026,8 @@ jobs:
               <dict>
                   <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
                   <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}</string>
+                  <key>${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</key>
+                  <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</string>
               </dict>
           </dict>
           </plist>

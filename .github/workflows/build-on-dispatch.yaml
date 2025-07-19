@@ -229,9 +229,9 @@ jobs:
           npm test -- --coverage --watchAll=false
           echo "✅ Unit tests completed!"
 
-  # App Store Connect Query for iOS - STORE-FIRST APPROACH
+  # App Store Connect Query for iOS - FIXED STORE-FIRST APPROACH
   app-store-query:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     needs: setup
     if: needs.setup.outputs.build_ios == 'true'
     outputs:
@@ -246,13 +246,15 @@ jobs:
       - name: Install Fastlane
         run: |
           echo "📦 Installing Fastlane for App Store Connect queries..."
-          sudo gem install fastlane
+          gem install fastlane --no-document
           echo "✅ Fastlane installed"
 
-      - name: Setup App Store Connect API Key
+      - name: Setup App Store Connect API Key (Working Method)
         run: |
-          echo "🔑 Setting up App Store Connect API key..."
-          mkdir -p ./fastlane
+          echo "🔑 Setting up App Store Connect API key using working structure..."
+          
+          # Create proper directory structure like working test
+          mkdir -p ios/fastlane
           
           # Get the key (base64 or direct)
           if [ -n "$ASC_API_KEY_P8_B64" ]; then
@@ -263,46 +265,76 @@ jobs:
             KEY="$ASC_API_KEY_P8_REPO"
           fi
           
-          # Create API key JSON
-          jq -n \
-            --arg key_id "$ASC_API_KEY_ID" \
-            --arg issuer_id "$ASC_ISSUER_ID" \
-            --arg key "$KEY" \
-            '{
-              "key_id": $key_id,
-              "issuer_id": $issuer_id,
-              "key": $key,
-              "duration": 1200,
-              "in_house": false
-            }' > ./fastlane/api_key.json
+          # Create API key JSON in proper location
+          cat > ios/fastlane/api_key.json << EOF
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID",
+            "key": "$KEY",
+            "duration": 1200,
+            "in_house": false
+          }
+          EOF
           
-          echo "✅ API key file created"
+          echo "✅ API key file created in ios/fastlane/"
 
-      - name: Query App Store Connect (Store-First)
+      - name: Query App Store Connect (Fixed Working Method)
         id: query
-        env:
-          FASTLANE_OPT_OUT_USAGE: "YES"
+        working-directory: ios
         run: |
           echo "🔍 Querying App Store Connect for latest TestFlight build..."
           echo "📋 Bundle ID: ${{ needs.setup.outputs.ios_bundle_id }}"
+          echo "📁 Working from: $(pwd)"
           
-          if fastlane run latest_testflight_build_number \
-              app_identifier:"${{ needs.setup.outputs.ios_bundle_id }}" \
-              api_key_path:"./fastlane/api_key.json" > /tmp/asc.txt 2>&1; then
+          # Create Fastfile using working pattern
+          cat > fastlane/Fastfile << 'EOF'
+          default_platform(:ios)
           
-            echo "✅ App Store Connect query succeeded:"
-            cat /tmp/asc.txt
+          platform :ios do
+            desc "Query TestFlight build number"
+            lane :get_build_number do
+              begin
+                build_num = latest_testflight_build_number(
+                  api_key_path: "fastlane/api_key.json",
+                  app_identifier: ENV["BUNDLE_ID"]
+                )
+                puts "SUCCESS:#{build_num}"
+              rescue => e
+                puts "ERROR:#{e.message}"
+                exit 1
+              end
+            end
+          end
+          EOF
           
-            LATEST_ASC_BUILD=$(grep -o '^[0-9]\+' /tmp/asc.txt | tail -1)
-            if [[ "$LATEST_ASC_BUILD" =~ ^[0-9]+$ ]] && [ "$LATEST_ASC_BUILD" -gt 0 ]; then
-              SUCCESS="true"
+          # Set environment for Fastlane
+          export BUNDLE_ID="${{ needs.setup.outputs.ios_bundle_id }}"
+          export FASTLANE_OPT_OUT_USAGE="YES"
+          
+          # Run the query
+          if OUTPUT=$(fastlane get_build_number 2>&1); then
+            echo "✅ Fastlane query completed"
+            echo "$OUTPUT"
+          
+            # Parse the result
+            if echo "$OUTPUT" | grep -q "SUCCESS:"; then
+              LATEST_ASC_BUILD=$(echo "$OUTPUT" | grep "SUCCESS:" | sed 's/.*SUCCESS://' | tr -d ' ')
+              if [[ "$LATEST_ASC_BUILD" =~ ^[0-9]+$ ]] && [ "$LATEST_ASC_BUILD" -gt 0 ]; then
+                SUCCESS="true"
+                echo "🎯 Found build number: $LATEST_ASC_BUILD"
+              else
+                LATEST_ASC_BUILD="0"
+                SUCCESS="false"
+                echo "⚠️ Invalid build number format: $LATEST_ASC_BUILD"
+              fi
             else
               LATEST_ASC_BUILD="0"
               SUCCESS="false"
+              echo "❌ No SUCCESS marker found in output"
             fi
           else
-            echo "❌ App Store Connect query failed:"
-            cat /tmp/asc.txt
+            echo "❌ Fastlane query failed:"
+            echo "$OUTPUT"
             LATEST_ASC_BUILD="0"
             SUCCESS="false"
           fi
@@ -977,11 +1009,11 @@ jobs:
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
         run: |
-            echo "🔑 Setting up Match certificates for main app..."
-            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
-            
-            echo "🔑 Setting up Match certificates for OneSignal extension..."
-            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+          echo "🔑 Setting up Match certificates for main app..."
+          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+          
+          echo "🔑 Setting up Match certificates for OneSignal extension..."
+          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
 
       - name: Setup App Store Connect API Key
         working-directory: ./private-repo
@@ -1076,7 +1108,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
-          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-16 [skip ci]" || exit 0
+          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-21 [skip ci]" || exit 0
           git push
 
   # Android Build & Deploy - ENHANCED STORE-FIRST WITH SAFETY BUFFER
@@ -1284,7 +1316,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-20 [skip ci]" || exit 0
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-21 [skip ci]" || exit 0
           git push
 
   # Summary

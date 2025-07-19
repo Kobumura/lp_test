@@ -1,25 +1,17 @@
-name: Test App Store Connect Query - All Versions
+name: Debug TestFlight - Show All Builds
 
 on:
   workflow_dispatch:
-    inputs:
-      ios_bundle_id:
-        description: 'iOS Bundle ID to test'
-        required: true
-        default: 'com.littletalks.app'
 
 jobs:
-  app-store-query-test:
+  debug-testflight:
     runs-on: macos-15
     steps:
-      - name: Setup App Store Connect API Key
+      - name: Setup
         run: |
-          echo "🔑 Setting up App Store Connect credentials..."
-          
-          # Create ios directory structure
           mkdir -p ios/fastlane
           
-          # Create the API key JSON
+          # Create API key
           cat > ios/fastlane/api_key.json << 'EOF'
           {
             "key_id": "4QM5FBBF6P",
@@ -30,175 +22,97 @@ jobs:
           }
           EOF
           
-          echo "BUNDLE_ID=${{ inputs.ios_bundle_id }}" >> $GITHUB_ENV
-          echo "✅ API key setup complete"
-
-      - name: Install Fastlane
-        run: |
-          echo "📦 Installing Fastlane..."
           gem install fastlane --no-document
-          gem install fastlane-plugin-versioning --no-document
-          echo "✅ Fastlane installed"
-          fastlane --version
 
-      - name: Query App Store Connect for ALL Build Numbers
+      - name: Check All TestFlight Builds
         working-directory: ios
         run: |
-          echo "🔍 Querying App Store Connect for ALL build numbers..."
-          echo "📋 Bundle ID: $BUNDLE_ID"
-          
-          # Create comprehensive Fastfile that checks all versions
+          # Use Fastlane's pilot to list all builds
           cat > fastlane/Fastfile << 'EOF'
           default_platform(:ios)
           
           platform :ios do
-            desc "Query all builds across all versions"
-            lane :query_all_builds do
-              puts "=== Comprehensive App Store Connect Query ==="
-              puts "Bundle ID: #{ENV['BUNDLE_ID']}"
-          
-              begin
-                # Method 1: Get latest build for ANY version (what we're currently using)
-                puts "\n--- Method 1: Latest build for any version ---"
-                build_any = latest_testflight_build_number(
-                  api_key_path: "fastlane/api_key.json",
-                  app_identifier: ENV["BUNDLE_ID"]
-                )
-                puts "Latest for ANY version: #{build_any}"
-          
-                # Method 2: Get highest build number across all versions
-                puts "\n--- Method 2: Highest build across ALL versions ---"
-                require 'spaceship'
-          
-                # Connect to App Store Connect
-                api_key = Spaceship::ConnectAPI::Token.from_json_file("fastlane/api_key.json")
-                Spaceship::ConnectAPI.token = api_key
-          
-                # Get the app
-                app = Spaceship::ConnectAPI::App.find(ENV["BUNDLE_ID"])
-                puts "Found app: #{app.name}"
-          
-                # Get all builds
-                all_builds = app.get_builds(
-                  includes: "preReleaseVersion",
-                  limit: 200
-                )
-          
-                puts "Total builds found: #{all_builds.count}"
-          
-                # Find the highest build number
-                highest_build = 0
-                build_versions = {}
-          
-                all_builds.each do |build|
-                  build_number = build.version.to_i
-                  version = build.pre_release_version&.version || "Unknown"
-          
-                  build_versions[version] ||= []
-                  build_versions[version] << build_number
-          
-                  if build_number > highest_build
-                    highest_build = build_number
-                  end
-                end
-          
-                puts "\nBuild numbers by version:"
-                build_versions.each do |version, builds|
-                  puts "  Version #{version}: #{builds.sort.reverse.first(5).join(', ')}#{builds.count > 5 ? '...' : ''}"
-                end
-          
-                puts "\n✅ HIGHEST_BUILD_NUMBER:#{highest_build}"
-          
-                # Method 3: Check specific recent versions
-                puts "\n--- Method 3: Check specific versions ---"
-                ["1.5.15", "1.5.16", "1.5.17", "1.5.18", "1.5.19", "1.5.20"].each do |version|
-                  begin
-                    build = latest_testflight_build_number(
-                      api_key_path: "fastlane/api_key.json",
-                      app_identifier: ENV["BUNDLE_ID"],
-                      version: version
-                    )
-                    puts "Version #{version}: build #{build}"
-                  rescue => e
-                    puts "Version #{version}: no builds or error"
-                  end
-                end
-          
-              rescue => e
-                puts "ERROR: #{e.message}"
-                puts "Backtrace: #{e.backtrace.first(5).join("\n")}"
-              end
-          
-              puts "\n=== Query Complete ==="
-            end
-          
-            # Alternative simpler lane
-            desc "Simple highest build query"
-            lane :simple_query do
-              puts "=== Simple Build Number Query ==="
-          
-              # Try without specifying version (should get latest)
-              build = latest_testflight_build_number(
-                api_key_path: "fastlane/api_key.json",
-                app_identifier: ENV["BUNDLE_ID"],
-                initial_build_number: 0
-              )
-          
-              puts "✅ SIMPLE_RESULT:#{build}"
+            desc "List all TestFlight builds"
+            lane :list_all_builds do
+              # This will show ALL builds in TestFlight
+              sh("fastlane pilot builds --app_identifier com.littletalks.app --api_key_path fastlane/api_key.json")
             end
           end
           EOF
           
-          echo "🚀 Running comprehensive query..."
-          
-          export FASTLANE_OPT_OUT_USAGE="YES"
-          export FASTLANE_HIDE_CHANGELOG="true"
-          
-          # Run the comprehensive query
-          if OUTPUT=$(fastlane query_all_builds 2>&1); then
-            echo "✅ Comprehensive query completed"
-          else
-            echo "⚠️ Comprehensive query had issues"
-          fi
+          echo "🔍 Listing ALL TestFlight builds..."
+          fastlane list_all_builds || true
           
           echo ""
-          echo "📋 COMPREHENSIVE QUERY OUTPUT:"
-          echo "=============================="
-          echo "$OUTPUT"
-          echo "=============================="
-          echo ""
+          echo "🔍 Now let's check what latest_testflight_build_number returns for different queries..."
           
-          # Parse for highest build
-          if echo "$OUTPUT" | grep -q "HIGHEST_BUILD_NUMBER:"; then
-            HIGHEST=$(echo "$OUTPUT" | grep "HIGHEST_BUILD_NUMBER:" | sed 's/.*HIGHEST_BUILD_NUMBER://' | tr -d ' ')
-            echo "🎯 HIGHEST BUILD NUMBER FOUND: $HIGHEST"
-          else
-            echo "❌ Could not determine highest build number"
+          # Create test lane
+          cat > fastlane/Fastfile << 'EOF'
+          default_platform(:ios)
           
-            # Try simple query as fallback
-            echo ""
-            echo "🔄 Trying simple query as fallback..."
-            if SIMPLE_OUTPUT=$(fastlane simple_query 2>&1); then
-              echo "$SIMPLE_OUTPUT"
-              if echo "$SIMPLE_OUTPUT" | grep -q "SIMPLE_RESULT:"; then
-                SIMPLE=$(echo "$SIMPLE_OUTPUT" | grep "SIMPLE_RESULT:" | sed 's/.*SIMPLE_RESULT://' | tr -d ' ')
-                echo "🎯 Simple query result: $SIMPLE"
-              fi
-            fi
-          fi
-
-      - name: Summary and Recommendations
-        if: always()
-        run: |
+          platform :ios do
+            desc "Test different queries"
+            lane :test_queries do
+              puts "\n=== Testing different query approaches ==="
+          
+              # Test 1: No version specified
+              puts "\n1️⃣ No version specified:"
+              begin
+                build = latest_testflight_build_number(
+                  api_key_path: "fastlane/api_key.json",
+                  app_identifier: "com.littletalks.app"
+                )
+                version = lane_context[SharedValues::LATEST_TESTFLIGHT_VERSION]
+                puts "   Result: Build #{build} from version #{version}"
+              rescue => e
+                puts "   Error: #{e.message}"
+              end
+          
+              # Test 2: With initial_build_number
+              puts "\n2️⃣ With initial_build_number 0:"
+              begin
+                build = latest_testflight_build_number(
+                  api_key_path: "fastlane/api_key.json",
+                  app_identifier: "com.littletalks.app",
+                  initial_build_number: 0
+                )
+                version = lane_context[SharedValues::LATEST_TESTFLIGHT_VERSION]
+                puts "   Result: Build #{build} from version #{version}"
+              rescue => e
+                puts "   Error: #{e.message}"
+              end
+          
+              # Test 3: Check multiple versions
+              puts "\n3️⃣ Checking specific versions:"
+              ["1.5.13", "1.5.14", "1.5.15", "1.5.16", "1.5.17"].each do |v|
+                begin
+                  build = latest_testflight_build_number(
+                    api_key_path: "fastlane/api_key.json",
+                    app_identifier: "com.littletalks.app",
+                    version: v,
+                    initial_build_number: 0
+                  )
+                  puts "   Version #{v}: Build #{build}"
+                rescue => e
+                  puts "   Version #{v}: No builds or error"
+                end
+              end
+          
+              # Test 4: Use app_store_build_number instead
+              puts "\n4️⃣ Using app_store_build_number:"
+              begin
+                build = app_store_build_number(
+                  api_key_path: "fastlane/api_key.json",
+                  app_identifier: "com.littletalks.app",
+                  live: false
+                )
+                puts "   Result: Build #{build}"
+              rescue => e
+                puts "   Error: #{e.message}"
+              end
+            end
+          end
+          EOF
+          
           echo ""
-          echo "📊 SUMMARY"
-          echo "=========="
-          echo "Based on the test results, here's what we learned:"
-          echo ""
-          echo "1. The current implementation only checks version 1.5.15"
-          echo "2. You need to query ALL versions to find the absolute highest build"
-          echo "3. The build number 1 is likely for version 1.5.15 specifically"
-          echo ""
-          echo "🔧 RECOMMENDED FIX:"
-          echo "Use the Spaceship API directly to query all builds across all versions"
-          echo "This ensures you get the absolute highest build number, not just for one version"
+          fastlane test_queries

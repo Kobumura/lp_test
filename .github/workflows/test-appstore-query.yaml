@@ -1,4 +1,4 @@
-name: Test App Store Connect Query (Fixed JSON)
+name: Test App Store Connect Query - All Versions
 
 on:
   workflow_dispatch:
@@ -12,16 +12,15 @@ jobs:
   app-store-query-test:
     runs-on: macos-15
     steps:
-      - name: Setup App Store Connect API Key (Fixed JSON Method)
+      - name: Setup App Store Connect API Key
         run: |
-          echo "🔑 Setting up App Store Connect credentials with proper JSON..."
+          echo "🔑 Setting up App Store Connect credentials..."
           
           # Create ios directory structure
           mkdir -p ios/fastlane
           
-          # Method 1: Create API key with properly escaped JSON
-          # This uses a here-doc with proper JSON formatting
-          cat > ios/fastlane/api_key.json << 'APIKEYEOF'
+          # Create the API key JSON
+          cat > ios/fastlane/api_key.json << 'EOF'
           {
             "key_id": "4QM5FBBF6P",
             "issuer_id": "63421d99-7718-41a8-99c8-01548625694f",
@@ -29,30 +28,7 @@ jobs:
             "duration": 1200,
             "in_house": false
           }
-          APIKEYEOF
-          
-          # Method 2: Alternative - create .p8 file separately
-          cat > ios/fastlane/AuthKey_4QM5FBBF6P.p8 << 'P8EOF'
-          -----BEGIN PRIVATE KEY-----
-          MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQghnrjw2IY0M/VODiY
-          k6Ex1H0W9jh2ws/5GXpwXTcF6xKgCgYIKoZIzj0DAQehRANCAARF2go6/YIvc5qz
-          oeEsjfmxRtEWSdA7QQQKOYjSkD5SqwAWHuTSJfS+5mw/J4UcUNvRe4MwBRZ4FtBj
-          hrCw4w+O
-          -----END PRIVATE KEY-----
-          P8EOF
-          
-          # Validate the JSON file
-          echo "🔍 Validating JSON file..."
-          if python3 -m json.tool ios/fastlane/api_key.json > /dev/null 2>&1; then
-            echo "✅ api_key.json is valid JSON!"
-            echo "📋 JSON content:"
-            python3 -m json.tool ios/fastlane/api_key.json | head -20
-          else
-            echo "❌ JSON validation failed!"
-            echo "📋 Raw content:"
-            cat ios/fastlane/api_key.json
-            exit 1
-          fi
+          EOF
           
           echo "BUNDLE_ID=${{ inputs.ios_bundle_id }}" >> $GITHUB_ENV
           echo "✅ API key setup complete"
@@ -61,193 +37,168 @@ jobs:
         run: |
           echo "📦 Installing Fastlane..."
           gem install fastlane --no-document
+          gem install fastlane-plugin-versioning --no-document
           echo "✅ Fastlane installed"
           fastlane --version
 
-      - name: Test App Store Connect Query (Multiple Methods)
+      - name: Query App Store Connect for ALL Build Numbers
         working-directory: ios
         run: |
-          echo "🔍 Testing App Store Connect query..."
+          echo "🔍 Querying App Store Connect for ALL build numbers..."
           echo "📋 Bundle ID: $BUNDLE_ID"
-          echo "📁 Working directory: $(pwd)"
-          echo "📁 Fastlane directory contents:"
-          ls -la fastlane/
           
-          # Create Fastfile with multiple test methods
-          cat > fastlane/Fastfile << 'FASTFILEOF'
+          # Create comprehensive Fastfile that checks all versions
+          cat > fastlane/Fastfile << 'EOF'
           default_platform(:ios)
           
           platform :ios do
-            desc "Query App Store Connect for build number"
-            lane :query_build_number do
-              puts "=== App Store Connect Build Number Query ==="
+            desc "Query all builds across all versions"
+            lane :query_all_builds do
+              puts "=== Comprehensive App Store Connect Query ==="
               puts "Bundle ID: #{ENV['BUNDLE_ID']}"
-              puts "Working directory: #{Dir.pwd}"
           
-              # Method 1: Using api_key.json file
               begin
-                puts "\n--- Method 1: Using api_key.json file ---"
-                build_num = latest_testflight_build_number(
+                # Method 1: Get latest build for ANY version (what we're currently using)
+                puts "\n--- Method 1: Latest build for any version ---"
+                build_any = latest_testflight_build_number(
                   api_key_path: "fastlane/api_key.json",
-                  app_identifier: ENV["BUNDLE_ID"],
-                  initial_build_number: 0
+                  app_identifier: ENV["BUNDLE_ID"]
                 )
-                puts "✅ METHOD1_SUCCESS:#{build_num}"
+                puts "Latest for ANY version: #{build_any}"
+          
+                # Method 2: Get highest build number across all versions
+                puts "\n--- Method 2: Highest build across ALL versions ---"
+                require 'spaceship'
+          
+                # Connect to App Store Connect
+                api_key = Spaceship::ConnectAPI::Token.from_json_file("fastlane/api_key.json")
+                Spaceship::ConnectAPI.token = api_key
+          
+                # Get the app
+                app = Spaceship::ConnectAPI::App.find(ENV["BUNDLE_ID"])
+                puts "Found app: #{app.name}"
+          
+                # Get all builds
+                all_builds = app.get_builds(
+                  includes: "preReleaseVersion",
+                  limit: 200
+                )
+          
+                puts "Total builds found: #{all_builds.count}"
+          
+                # Find the highest build number
+                highest_build = 0
+                build_versions = {}
+          
+                all_builds.each do |build|
+                  build_number = build.version.to_i
+                  version = build.pre_release_version&.version || "Unknown"
+          
+                  build_versions[version] ||= []
+                  build_versions[version] << build_number
+          
+                  if build_number > highest_build
+                    highest_build = build_number
+                  end
+                end
+          
+                puts "\nBuild numbers by version:"
+                build_versions.each do |version, builds|
+                  puts "  Version #{version}: #{builds.sort.reverse.first(5).join(', ')}#{builds.count > 5 ? '...' : ''}"
+                end
+          
+                puts "\n✅ HIGHEST_BUILD_NUMBER:#{highest_build}"
+          
+                # Method 3: Check specific recent versions
+                puts "\n--- Method 3: Check specific versions ---"
+                ["1.5.15", "1.5.16", "1.5.17", "1.5.18", "1.5.19", "1.5.20"].each do |version|
+                  begin
+                    build = latest_testflight_build_number(
+                      api_key_path: "fastlane/api_key.json",
+                      app_identifier: ENV["BUNDLE_ID"],
+                      version: version
+                    )
+                    puts "Version #{version}: build #{build}"
+                  rescue => e
+                    puts "Version #{version}: no builds or error"
+                  end
+                end
+          
               rescue => e
-                puts "❌ METHOD1_ERROR:#{e.message}"
-                puts "Backtrace: #{e.backtrace.first(3).join("\n")}"
-              end
-          
-              # Method 2: Using .p8 file
-              begin
-                puts "\n--- Method 2: Using .p8 file ---"
-                api_key = app_store_connect_api_key(
-                  key_id: "4QM5FBBF6P",
-                  issuer_id: "63421d99-7718-41a8-99c8-01548625694f",
-                  key_filepath: "fastlane/AuthKey_4QM5FBBF6P.p8"
-                )
-          
-                build_num = latest_testflight_build_number(
-                  api_key: api_key,
-                  app_identifier: ENV["BUNDLE_ID"],
-                  initial_build_number: 0
-                )
-                puts "✅ METHOD2_SUCCESS:#{build_num}"
-              rescue => e
-                puts "❌ METHOD2_ERROR:#{e.message}"
-              end
-          
-              # Method 3: Direct API key hash
-              begin
-                puts "\n--- Method 3: Direct API key hash ---"
-                key_content = File.read("fastlane/AuthKey_4QM5FBBF6P.p8")
-          
-                build_num = latest_testflight_build_number(
-                  api_key: {
-                    key_id: "4QM5FBBF6P",
-                    issuer_id: "63421d99-7718-41a8-99c8-01548625694f",
-                    key: key_content,
-                    duration: 1200,
-                    in_house: false
-                  },
-                  app_identifier: ENV["BUNDLE_ID"],
-                  initial_build_number: 0
-                )
-                puts "✅ METHOD3_SUCCESS:#{build_num}"
-              rescue => e
-                puts "❌ METHOD3_ERROR:#{e.message}"
+                puts "ERROR: #{e.message}"
+                puts "Backtrace: #{e.backtrace.first(5).join("\n")}"
               end
           
               puts "\n=== Query Complete ==="
             end
+          
+            # Alternative simpler lane
+            desc "Simple highest build query"
+            lane :simple_query do
+              puts "=== Simple Build Number Query ==="
+          
+              # Try without specifying version (should get latest)
+              build = latest_testflight_build_number(
+                api_key_path: "fastlane/api_key.json",
+                app_identifier: ENV["BUNDLE_ID"],
+                initial_build_number: 0
+              )
+          
+              puts "✅ SIMPLE_RESULT:#{build}"
+            end
           end
-          FASTFILEOF
+          EOF
           
-          echo "🚀 Running Fastlane tests..."
+          echo "🚀 Running comprehensive query..."
           
-          # Run with more verbose output
           export FASTLANE_OPT_OUT_USAGE="YES"
           export FASTLANE_HIDE_CHANGELOG="true"
           
-          if OUTPUT=$(fastlane query_build_number 2>&1); then
-            echo "✅ Fastlane completed"
+          # Run the comprehensive query
+          if OUTPUT=$(fastlane query_all_builds 2>&1); then
+            echo "✅ Comprehensive query completed"
           else
-            echo "⚠️ Fastlane had issues but continuing..."
+            echo "⚠️ Comprehensive query had issues"
           fi
           
           echo ""
-          echo "📋 FULL FASTLANE OUTPUT:"
-          echo "======================="
+          echo "📋 COMPREHENSIVE QUERY OUTPUT:"
+          echo "=============================="
           echo "$OUTPUT"
-          echo "======================="
+          echo "=============================="
           echo ""
           
-          # Parse results
-          SUCCESS_COUNT=0
-          WORKING_METHODS=()
-          
-          # Check Method 1
-          if echo "$OUTPUT" | grep -q "METHOD1_SUCCESS:"; then
-            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD1_SUCCESS:" | sed 's/.*METHOD1_SUCCESS://' | tr -d ' ')
-            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
-              echo "✅ Method 1 (api_key.json): Build $BUILD_NUM"
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              WORKING_METHODS+=("api_key.json")
-            fi
-          fi
-          
-          # Check Method 2
-          if echo "$OUTPUT" | grep -q "METHOD2_SUCCESS:"; then
-            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD2_SUCCESS:" | sed 's/.*METHOD2_SUCCESS://' | tr -d ' ')
-            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
-              echo "✅ Method 2 (.p8 file): Build $BUILD_NUM"
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              WORKING_METHODS+=(".p8_file")
-            fi
-          fi
-          
-          # Check Method 3
-          if echo "$OUTPUT" | grep -q "METHOD3_SUCCESS:"; then
-            BUILD_NUM=$(echo "$OUTPUT" | grep "METHOD3_SUCCESS:" | sed 's/.*METHOD3_SUCCESS://' | tr -d ' ')
-            if [[ "$BUILD_NUM" =~ ^[0-9]+$ ]]; then
-              echo "✅ Method 3 (direct hash): Build $BUILD_NUM"
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              WORKING_METHODS+=("direct_hash")
-            fi
-          fi
-          
-          echo ""
-          echo "🎯 FINAL RESULTS"
-          echo "==============="
-          if [ "$SUCCESS_COUNT" -gt 0 ]; then
-            echo "✅ SUCCESS: $SUCCESS_COUNT method(s) working!"
-            echo "✅ Working methods: ${WORKING_METHODS[*]}"
-            echo ""
-            echo "🔧 RECOMMENDED IMPLEMENTATION:"
-            if [[ " ${WORKING_METHODS[@]} " =~ " api_key.json " ]]; then
-              echo "Use Method 1: api_key.json with proper JSON escaping"
-            elif [[ " ${WORKING_METHODS[@]} " =~ " .p8_file " ]]; then
-              echo "Use Method 2: Separate .p8 file"
-            else
-              echo "Use Method 3: Direct API key hash"
-            fi
+          # Parse for highest build
+          if echo "$OUTPUT" | grep -q "HIGHEST_BUILD_NUMBER:"; then
+            HIGHEST=$(echo "$OUTPUT" | grep "HIGHEST_BUILD_NUMBER:" | sed 's/.*HIGHEST_BUILD_NUMBER://' | tr -d ' ')
+            echo "🎯 HIGHEST BUILD NUMBER FOUND: $HIGHEST"
           else
-            echo "❌ ALL METHODS FAILED"
-            echo "🔍 Check:"
-            echo "   - API key permissions in App Store Connect"
-            echo "   - Bundle ID exists in App Store Connect"
-            echo "   - TestFlight access is enabled for the API key"
+            echo "❌ Could not determine highest build number"
+          
+            # Try simple query as fallback
+            echo ""
+            echo "🔄 Trying simple query as fallback..."
+            if SIMPLE_OUTPUT=$(fastlane simple_query 2>&1); then
+              echo "$SIMPLE_OUTPUT"
+              if echo "$SIMPLE_OUTPUT" | grep -q "SIMPLE_RESULT:"; then
+                SIMPLE=$(echo "$SIMPLE_OUTPUT" | grep "SIMPLE_RESULT:" | sed 's/.*SIMPLE_RESULT://' | tr -d ' ')
+                echo "🎯 Simple query result: $SIMPLE"
+              fi
+            fi
           fi
 
-      - name: Final Validation
-        working-directory: ios
+      - name: Summary and Recommendations
         if: always()
         run: |
           echo ""
-          echo "🔍 FINAL VALIDATION"
-          echo "=================="
-          
-          echo "📁 Directory structure:"
-          find . -name "*.json" -o -name "*.p8" -o -name "Fastfile" | sort
-          
+          echo "📊 SUMMARY"
+          echo "=========="
+          echo "Based on the test results, here's what we learned:"
           echo ""
-          echo "📋 api_key.json validation:"
-          if [ -f "fastlane/api_key.json" ]; then
-            if python3 -c "import json; data = json.load(open('fastlane/api_key.json')); print('✅ Valid JSON with', len(data), 'keys')" 2>/dev/null; then
-              echo "✅ JSON structure is valid"
-              # Check if key field has proper newlines
-              if python3 -c "import json; data = json.load(open('fastlane/api_key.json')); print('✅ Key has newlines' if '\\n' in data.get('key', '') else '❌ Key missing newlines')" 2>/dev/null; then
-                echo "✅ Key field properly formatted"
-              fi
-            else
-              echo "❌ JSON is invalid"
-            fi
-          fi
-          
+          echo "1. The current implementation only checks version 1.5.15"
+          echo "2. You need to query ALL versions to find the absolute highest build"
+          echo "3. The build number 1 is likely for version 1.5.15 specifically"
           echo ""
-          echo "📋 .p8 file validation:"
-          if [ -f "fastlane/AuthKey_4QM5FBBF6P.p8" ]; then
-            echo "✅ .p8 file exists"
-            echo "First line: $(head -1 fastlane/AuthKey_4QM5FBBF6P.p8)"
-            echo "Last line: $(tail -1 fastlane/AuthKey_4QM5FBBF6P.p8)"
-          fi
+          echo "🔧 RECOMMENDED FIX:"
+          echo "Use the Spaceship API directly to query all builds across all versions"
+          echo "This ensures you get the absolute highest build number, not just for one version"

@@ -1055,7 +1055,7 @@ jobs:
               <key>compileBitcode</key>
               <false/>
               <key>manageAppVersionAndBuildNumber</key>
-              <false/>
+              <true/>
               <key>signingStyle</key>
               <string>manual</string>
               <key>provisioningProfiles</key>

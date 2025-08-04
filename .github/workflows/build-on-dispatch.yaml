@@ -51,6 +51,10 @@ jobs:
       ios_workspace: ${{ steps.config.outputs.ios_workspace }}
       android_package_name: ${{ steps.config.outputs.android_package_name }}
       apple_team_id: ${{ steps.config.outputs.apple_team_id }}
+      # Version configuration
+      version_strategy: ${{ steps.config.outputs.version_strategy }}
+      custom_version: ${{ steps.config.outputs.custom_version }}
+      custom_build_number: ${{ steps.config.outputs.custom_build_number }}
     steps:
       - name: Configure Build
         id: config
@@ -77,6 +81,10 @@ jobs:
             IOS_WORKSPACE="${{ github.event.client_payload.app_config.ios_workspace || 'App.xcworkspace' }}"
             ANDROID_PACKAGE_NAME="${{ github.event.client_payload.app_config.android_package_name || 'com.example.app' }}"
             APPLE_TEAM_ID="${{ github.event.client_payload.app_config.apple_team_id || '' }}"
+            # Version configuration from payload
+            VERSION_STRATEGY="${{ github.event.client_payload.version_config.strategy || 'auto' }}"
+            CUSTOM_VERSION="${{ github.event.client_payload.version_config.custom_version || '' }}"
+            CUSTOM_BUILD_NUMBER="${{ github.event.client_payload.version_config.custom_build_number || '' }}"
           else
             TARGET_REPO="${{ inputs.target_repo }}"
             TARGET_REF="main"
@@ -96,6 +104,10 @@ jobs:
             IOS_WORKSPACE="App.xcworkspace"
             ANDROID_PACKAGE_NAME="com.example.app"
             APPLE_TEAM_ID=""
+            # Default version configuration
+            VERSION_STRATEGY="auto"
+            CUSTOM_VERSION=""
+            CUSTOM_BUILD_NUMBER=""
           fi
           
           # 🔧 DEVELOPMENT MODE PROCESSING
@@ -125,6 +137,9 @@ jobs:
           echo "  iOS Workspace: $IOS_WORKSPACE"
           echo "  Android Package: $ANDROID_PACKAGE_NAME"
           echo "  Apple Team ID: $APPLE_TEAM_ID"
+          echo "  Version Strategy: $VERSION_STRATEGY"
+          echo "  Custom Version: $CUSTOM_VERSION"
+          echo "  Custom Build Number: $CUSTOM_BUILD_NUMBER"
           
           # Set platform outputs
           if [[ "$PLATFORM" == "ios" || "$PLATFORM" == "both" ]]; then
@@ -184,6 +199,9 @@ jobs:
           echo "ios_workspace=$IOS_WORKSPACE" >> $GITHUB_OUTPUT
           echo "android_package_name=$ANDROID_PACKAGE_NAME" >> $GITHUB_OUTPUT
           echo "apple_team_id=$APPLE_TEAM_ID" >> $GITHUB_OUTPUT
+          echo "version_strategy=$VERSION_STRATEGY" >> $GITHUB_OUTPUT
+          echo "custom_version=$CUSTOM_VERSION" >> $GITHUB_OUTPUT
+          echo "custom_build_number=$CUSTOM_BUILD_NUMBER" >> $GITHUB_OUTPUT
           
           echo ""
           echo "✅ Configuration complete!"
@@ -886,7 +904,7 @@ jobs:
         if: failure() && needs.setup.outputs.fail_fast == 'true'
         run: exit 1
 
-  # iOS Build & Deploy - STORE-FIRST VERSION MANAGEMENT
+  # iOS Build & Deploy - ENHANCED VERSION MANAGEMENT
   ios-build:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
     needs: [setup, ios-ui-tests, app-store-query]
@@ -941,37 +959,82 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      - name: Read and determine next iOS version (STORE-FIRST APPROACH)
+      - name: Read and determine next iOS version (ENHANCED VERSION CONTROL)
         working-directory: ./private-repo
         run: |
           PBX="ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj"
           CURRENT_VERSION=$(grep -o "MARKETING_VERSION = [^;]*" $PBX | head -1 | sed 's/MARKETING_VERSION = //;s/;//')
           CURRENT_BUILD=$(grep -o "CURRENT_PROJECT_VERSION = [^;]*" $PBX | head -1 | sed 's/CURRENT_PROJECT_VERSION = //;s/;//')
           
-          # STORE-FIRST APPROACH: Use App Store Connect as source of truth
-          LATEST_APP_STORE_BUILD="${{ needs.app-store-query.outputs.latest_build_number }}"
-          APP_STORE_SUCCESS="${{ needs.app-store-query.outputs.query_success }}"
+          # Parse current version components
+          IFS='.' read -ra V <<< "$CURRENT_VERSION"
+          MAJOR=${V[0]}
+          MINOR=${V[1]}
+          PATCH=${V[2]}
           
-          if [ "$APP_STORE_SUCCESS" = "true" ] && [ "$LATEST_APP_STORE_BUILD" != "0" ]; then
-            NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
-            STRATEGY="App Store Connect + 1 (store-first)"
+          # Version Strategy Logic
+          VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
+          CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
+          CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
+          
+          echo "📋 iOS Version Management:"
+          echo "  Current Version: $CURRENT_VERSION (build $CURRENT_BUILD)"
+          echo "  Version Strategy: $VERSION_STRATEGY"
+          
+          # Determine version name based on strategy
+          case "$VERSION_STRATEGY" in
+            "major")
+              NEXT_VERSION="$((MAJOR + 1)).0.0"
+              echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "minor")
+              NEXT_VERSION="$MAJOR.$((MINOR + 1)).0"
+              echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "patch")
+              NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "custom")
+              if [ -n "$CUSTOM_VERSION" ]; then
+                NEXT_VERSION="$CUSTOM_VERSION"
+                echo "  Custom version: $NEXT_VERSION"
+              else
+                NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+                echo "  No custom version provided, using patch increment: $NEXT_VERSION"
+              fi
+              ;;
+            "build_only")
+              NEXT_VERSION="$CURRENT_VERSION"
+              echo "  Build only: keeping version $NEXT_VERSION"
+              ;;
+            *)  # "auto" or default
+              NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+          esac
+          
+          # Determine build number
+          if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
+            NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
+            echo "  Custom build number: $NEXT_BUILD"
           else
-            # Fallback: use project file but ensure it's higher than any potential store version
-            FALLBACK_BUILD=$((CURRENT_BUILD > 100 ? CURRENT_BUILD + 1 : 100))
-            NEXT_BUILD="$FALLBACK_BUILD"
-            STRATEGY="Project file fallback (store query failed)"
+            # Store-first approach for build number
+            LATEST_APP_STORE_BUILD="${{ needs.app-store-query.outputs.latest_build_number }}"
+            APP_STORE_SUCCESS="${{ needs.app-store-query.outputs.query_success }}"
+          
+            if [ "$APP_STORE_SUCCESS" = "true" ] && [ "$LATEST_APP_STORE_BUILD" != "0" ]; then
+              NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
+              echo "  Build number: $NEXT_BUILD (App Store + 1)"
+            else
+              FALLBACK_BUILD=$((CURRENT_BUILD > 100 ? CURRENT_BUILD + 1 : 100))
+              NEXT_BUILD="$FALLBACK_BUILD"
+              echo "  Build number: $NEXT_BUILD (fallback)"
+            fi
           fi
           
-          # Version name increment
-          IFS='.' read -ra V <<< "$CURRENT_VERSION"
-          NEXT_VERSION="${V[0]}.${V[1]}.$((V[2]+1))"
-          
-          echo "📋 iOS Store-First Version Management:"
-          echo "  Current Project: $CURRENT_VERSION (build $CURRENT_BUILD)"
-          echo "  App Store Latest: $LATEST_APP_STORE_BUILD"
-          echo "  App Store Query Success: $APP_STORE_SUCCESS"
-          echo "  Next Version: $NEXT_VERSION (build $NEXT_BUILD)"
-          echo "  Strategy: $STRATEGY"
+          echo ""
+          echo "✅ Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
           
           echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
@@ -1108,10 +1171,10 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
-          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-21 [skip ci]" || exit 0
+          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
           git push
 
-  # Android Build & Deploy - ENHANCED STORE-FIRST WITH SAFETY BUFFER
+  # Android Build & Deploy - ENHANCED VERSION MANAGEMENT
   android-build:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
@@ -1205,45 +1268,86 @@ jobs:
             ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-      - name: Read and determine next Android version (ENHANCED STORE-FIRST)
+      - name: Read and determine next Android version (ENHANCED VERSION CONTROL)
         working-directory: ./private-repo/android/app
         run: |
           CURRENT_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
           CURRENT_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
           
-          # ENHANCED STORE-FIRST APPROACH with safety buffer
-          GOOGLE_PLAY_SUCCESS="${{ needs.google-play-query.outputs.query_success }}"
-          
-          if [ "$GOOGLE_PLAY_SUCCESS" = "true" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ]; then
-            # Store-first approach: use Google Play + 1 (already includes safety buffer)
-            NEXT_BUILD="$LATEST_GOOGLE_PLAY_BUILD"
-            if [ "$NEXT_BUILD" -le "$CURRENT_VERSION_CODE" ]; then
-              NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
-            fi
-            STRATEGY="Google Play Console + safety buffer (store-first)"
-          else
-            # Fallback: project file with minimum safety buffer
-            NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
-            if [ "$NEXT_BUILD" -lt 100 ]; then
-              NEXT_BUILD=100
-            fi
-            STRATEGY="Project file with safety buffer (store query failed)"
-          fi
-          
-          # Version name increment
+          # Parse current version components
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION_NAME"
           MAJOR=${VERSION_PARTS[0]}
           MINOR=${VERSION_PARTS[1]}
           PATCH=${VERSION_PARTS[2]}
-          NEXT_PATCH=$((PATCH + 1))
-          NEXT_VERSION_NAME="$MAJOR.$MINOR.$NEXT_PATCH"
           
-          echo "📋 Enhanced Store-First Version Resolution:"
+          # Version Strategy Logic
+          VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
+          CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
+          CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
+          
+          echo "📋 Android Version Management:"
           echo "  Current Version: $CURRENT_VERSION_NAME (build $CURRENT_VERSION_CODE)"
-          echo "  Google Play Highest: $LATEST_GOOGLE_PLAY_BUILD"
-          echo "  Google Play Query Success: $GOOGLE_PLAY_SUCCESS"
-          echo "  Next Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
-          echo "  Strategy Used: $STRATEGY"
+          echo "  Version Strategy: $VERSION_STRATEGY"
+          
+          # Determine version name based on strategy
+          case "$VERSION_STRATEGY" in
+            "major")
+              NEXT_VERSION_NAME="$((MAJOR + 1)).0.0"
+              echo "  Major increment: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+              ;;
+            "minor")
+              NEXT_VERSION_NAME="$MAJOR.$((MINOR + 1)).0"
+              echo "  Minor increment: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+              ;;
+            "patch")
+              NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Patch increment: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+              ;;
+            "custom")
+              if [ -n "$CUSTOM_VERSION" ]; then
+                NEXT_VERSION_NAME="$CUSTOM_VERSION"
+                echo "  Custom version: $NEXT_VERSION_NAME"
+              else
+                NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+                echo "  No custom version provided, using patch increment: $NEXT_VERSION_NAME"
+              fi
+              ;;
+            "build_only")
+              NEXT_VERSION_NAME="$CURRENT_VERSION_NAME"
+              echo "  Build only: keeping version $NEXT_VERSION_NAME"
+              ;;
+            *)  # "auto" or default
+              NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Auto increment (patch): $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+              ;;
+          esac
+          
+          # Determine build number
+          if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
+            NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
+            echo "  Custom build number: $NEXT_BUILD"
+          else
+            # Store-first approach for build number
+            GOOGLE_PLAY_SUCCESS="${{ needs.google-play-query.outputs.query_success }}"
+            LATEST_GOOGLE_PLAY_BUILD="${{ needs.google-play-query.outputs.latest_build_number }}"
+          
+            if [ "$GOOGLE_PLAY_SUCCESS" = "true" ] && [ "$LATEST_GOOGLE_PLAY_BUILD" != "0" ]; then
+              NEXT_BUILD="$LATEST_GOOGLE_PLAY_BUILD"
+              if [ "$NEXT_BUILD" -le "$CURRENT_VERSION_CODE" ]; then
+                NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
+              fi
+              echo "  Build number: $NEXT_BUILD (Google Play + safety buffer)"
+            else
+              NEXT_BUILD=$((CURRENT_VERSION_CODE + 1))
+              if [ "$NEXT_BUILD" -lt 100 ]; then
+                NEXT_BUILD=100
+              fi
+              echo "  Build number: $NEXT_BUILD (fallback)"
+            fi
+          fi
+          
+          echo ""
+          echo "✅ Final Android Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
           
           echo "CURRENT_VERSION_NAME=$CURRENT_VERSION_NAME" >> $GITHUB_ENV
           echo "CURRENT_VERSION_CODE=$CURRENT_VERSION_CODE" >> $GITHUB_ENV
@@ -1253,7 +1357,7 @@ jobs:
       - name: Update Android version for build
         working-directory: ./private-repo/android/app
         run: |
-          echo "🔄 Updating Android version using enhanced store-first approach..."
+          echo "🔄 Updating Android version using enhanced version control..."
           echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
           echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
           
@@ -1316,7 +1420,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-21 [skip ci]" || exit 0
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
           git push
 
   # Summary
@@ -1332,6 +1436,7 @@ jobs:
           echo "Ref: ${{ needs.setup.outputs.target_ref }}"
           echo "Actor: ${{ needs.setup.outputs.trigger_actor }}"
           echo "Platform: ${{ needs.setup.outputs.build_ios }} iOS, ${{ needs.setup.outputs.build_android }} Android"
+          echo "Version Strategy: ${{ needs.setup.outputs.version_strategy }}"
           
           if [ "${{ needs.setup.outputs.dev_mode }}" = "true" ]; then
             echo "🔧 DEV MODE: Tests were skipped for pipeline development"

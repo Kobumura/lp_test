@@ -1612,3 +1612,4 @@ summary:
         echo "  App Store: ${{ needs.app-store-query.outputs.query_success }} (build ${{ needs.app-store-query.outputs.latest_build_number }})"
         echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
         echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
+        

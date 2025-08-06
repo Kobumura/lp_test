@@ -367,6 +367,7 @@ jobs:
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
   # Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
+  # Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
   google-play-query:
     runs-on: ubuntu-latest
     needs: setup
@@ -383,7 +384,7 @@ jobs:
           GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
           echo "🔑 Setting up Google Play credentials..."
-          
+
           if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
             echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
@@ -392,7 +393,7 @@ jobs:
             echo "❌ No Google Play service account JSON available"
             exit 1
           fi
-          
+
           # Verify the JSON file is valid
           echo "🔍 Validating JSON file..."
           if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
@@ -414,13 +415,13 @@ jobs:
         run: |
           echo "🔍 Querying Google Play Console for full version information..."
           echo "📋 Package Name: ${{ needs.setup.outputs.android_package_name }}"
-          
+
           # Create Python script for version parsing
           cat > parse_versions.py << 'EOF'
           import sys
           import json
           import re
-          
+
           def parse_version(version_string):
               """Parse version string and return major, minor, patch"""
               match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_string)
@@ -432,65 +433,65 @@ jobs:
                       'full': f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
                   }
               return None
-          
+
           def compare_versions(v1, v2):
               """Return True if v1 > v2 (semantic version comparison)"""
               if not v1 or not v2:
                   return bool(v1)
-          
+
               if v1['major'] != v2['major']:
                   return v1['major'] > v2['major']
               if v1['minor'] != v2['minor']:
                   return v1['minor'] > v2['minor']
               return v1['patch'] > v2['patch']
-          
+
           # Read track data from stdin
           track_data = sys.stdin.read()
-          
+
           # Extract track information
           tracks = re.findall(r'Track: (\w+)\nReleases:.*?Name: ([^\n]+).*?Version codes:\s*\n\s*- (\d+)', track_data, re.DOTALL)
-          
+
           versions = {}
           highest_version_obj = None
           highest_version_track = None
           highest_version_build = 0
           highest_build_overall = 0
-          
+
           print("📊 Found versions in tracks:")
           print("-" * 50)
-          
+
           for track, version_name, build_code in tracks:
               build_num = int(build_code)
               parsed_version = parse_version(version_name)
-          
+
               if build_num > highest_build_overall:
                   highest_build_overall = build_num
-          
+
               if parsed_version:
                   versions[track] = {
                       'version': parsed_version['full'],
                       'build': build_num,
                       'raw_name': version_name
                   }
-          
+
                   print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
-          
+
                   # Check if this is the highest VERSION (not build)
                   if compare_versions(parsed_version, highest_version_obj):
                       highest_version_obj = parsed_version
                       highest_version_track = track
                       highest_version_build = build_num
-          
+
           print("-" * 50)
-          
+
           # Output results
           if highest_version_obj:
               print(f"\n✅ Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
               print(f"📦 Highest BUILD overall: {highest_build_overall}")
-          
+
               # Use the highest semantic version, but ensure build number is always higher
               safe_build = max(highest_build_overall + 10, highest_version_build + 10)
-          
+
               print(f"HIGHEST_VERSION={highest_version_obj['full']}")
               print(f"HIGHEST_BUILD={safe_build}")
               print(f"VERSION_SOURCE={highest_version_track}")
@@ -501,12 +502,12 @@ jobs:
               print("VERSION_SOURCE=none")
               print("ALL_VERSIONS={}")
           EOF
-          
+
           # Query all tracks and capture output
           TRACK_OUTPUT=""
           for TRACK in "internal" "alpha" "beta" "production"; do
             echo "🔍 Checking track: $TRACK"
-          
+
             if OUTPUT=$(google-play tracks get \
                 --package-name "${{ needs.setup.outputs.android_package_name }}" \
                 --track "$TRACK" \
@@ -515,39 +516,42 @@ jobs:
               echo "✅ Got track data"
             fi
           done
-          
+
           # Parse the track data with version-first logic
           echo -e "$TRACK_OUTPUT" | python3 parse_versions.py > version_results.txt
-          
+
           # Read the results
           HIGHEST_VERSION="0.0.0"
           HIGHEST_BUILD="0"
           VERSION_SOURCE="none"
-          ALL_VERSIONS="{}"
           SUCCESS="false"
-          
+
           if [ -f version_results.txt ]; then
             # Show the analysis output
             cat version_results.txt
-          
-            # Extract the variables
+
+            # Extract the variables - FIX: Only process specific lines
             while IFS= read -r line; do
-              if [[ $line == HIGHEST_VERSION=* ]] || [[ $line == HIGHEST_BUILD=* ]] || [[ $line == VERSION_SOURCE=* ]] || [[ $line == ALL_VERSIONS=* ]]; then
-                eval "$line"
+              if [[ $line == HIGHEST_VERSION=* ]]; then
+                HIGHEST_VERSION="${line#HIGHEST_VERSION=}"
+              elif [[ $line == HIGHEST_BUILD=* ]]; then
+                HIGHEST_BUILD="${line#HIGHEST_BUILD=}"
+              elif [[ $line == VERSION_SOURCE=* ]]; then
+                VERSION_SOURCE="${line#VERSION_SOURCE=}"
               fi
             done < version_results.txt
-          
+
             if [ "$HIGHEST_VERSION" != "0.0.0" ] && [ "$HIGHEST_BUILD" -gt 0 ]; then
               SUCCESS="true"
             fi
           fi
-          
+
           echo ""
           echo "📋 Final results:"
           echo "  Version: $HIGHEST_VERSION (from $VERSION_SOURCE track)"
           echo "  Build: $HIGHEST_BUILD (with safety buffer)"
           echo "  Success: $SUCCESS"
-          
+
           echo "version_name=$HIGHEST_VERSION" >> $GITHUB_OUTPUT
           echo "build_number=$HIGHEST_BUILD" >> $GITHUB_OUTPUT
           echo "version_source=$VERSION_SOURCE" >> $GITHUB_OUTPUT

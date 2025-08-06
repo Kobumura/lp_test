@@ -1317,299 +1317,299 @@ jobs:
           git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
           git push
 
-# Android Build & Deploy - TRUE STORE-FIRST VERSION MANAGEMENT
-android-build:
-  runs-on: ${{ needs.setup.outputs.android_runner }}
-  timeout-minutes: 30
-  needs: [setup, android-ui-tests, google-play-query]
-  if: always() && needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.android-ui-tests.outputs.ui_tests_passed == 'true')
-  env:
-    ANDROID_DIR: ${{ github.workspace }}/private-repo/android
-    ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
-    ANDROID_RELEASE_KEY_ALIAS: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_ALIAS || secrets.ANDROID_RELEASE_KEY_ALIAS }}
-    ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
-    LATEST_GOOGLE_PLAY_BUILD: ${{ needs.google-play-query.outputs.latest_build_number }}
-  steps:
-    # 🔧 DEV MODE WARNING
-    - name: Development Mode Warning
-      if: needs.setup.outputs.dev_mode == 'true'
-      run: |
-        echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
-        echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
-        echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
-        echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
+  # Android Build & Deploy - TRUE STORE-FIRST VERSION MANAGEMENT
+  android-build:
+    runs-on: ${{ needs.setup.outputs.android_runner }}
+    timeout-minutes: 30
+    needs: [setup, android-ui-tests, google-play-query]
+    if: always() && needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.android-ui-tests.outputs.ui_tests_passed == 'true')
+    env:
+      ANDROID_DIR: ${{ github.workspace }}/private-repo/android
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_ALIAS || secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      LATEST_GOOGLE_PLAY_BUILD: ${{ needs.google-play-query.outputs.latest_build_number }}
+    steps:
+      # 🔧 DEV MODE WARNING
+      - name: Development Mode Warning
+        if: needs.setup.outputs.dev_mode == 'true'
+        run: |
+          echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
+          echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
+          echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
+          echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
 
-    - name: Start Build Timer
-      run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+      - name: Start Build Timer
+        run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
 
-    - name: Display Google Play Query Results
-      run: |
-        echo "🔍 Google Play Console Query Results:"
-        echo "  Latest Version Name: ${{ needs.google-play-query.outputs.latest_version_name }}"
-        echo "  Latest Build Number: ${{ needs.google-play-query.outputs.latest_build_number }}"
-        echo "  Version Source: ${{ needs.google-play-query.outputs.version_source }}"
-        echo "  Query Success: ${{ needs.google-play-query.outputs.query_success }}"
+      - name: Display Google Play Query Results
+        run: |
+          echo "🔍 Google Play Console Query Results:"
+          echo "  Latest Version Name: ${{ needs.google-play-query.outputs.latest_version_name }}"
+          echo "  Latest Build Number: ${{ needs.google-play-query.outputs.latest_build_number }}"
+          echo "  Version Source: ${{ needs.google-play-query.outputs.version_source }}"
+          echo "  Query Success: ${{ needs.google-play-query.outputs.query_success }}"
 
-    - name: Checkout Private Repository
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ needs.setup.outputs.target_repo }}
-        ref: ${{ needs.setup.outputs.target_ref }}
-        token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
-        path: ./private-repo
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
 
-    - name: Install Java (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/setup-java@v4
-      with:
-        java-version: 17
-        cache: gradle
-        distribution: adopt
+      - name: Install Java (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/setup-java@v4
+        with:
+          java-version: 17
+          cache: gradle
+          distribution: adopt
 
-    - name: Install Java (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/setup-java@v4
-      with:
-        java-version: 17
-        cache: gradle
-        distribution: adopt
+      - name: Install Java (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          cache: gradle
+          distribution: adopt
 
-    - name: Setup Node (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
+      - name: Setup Node (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
 
-    - name: Setup Node (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
+      - name: Setup Node (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
 
-    - name: Install Modules
-      working-directory: ./private-repo
-      run: yarn install --frozen-lockfile
+      - name: Install Modules
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
 
-    - name: Cache Gradle (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/cache@v3
-      with:
-        path: |
-          ~/.gradle/wrapper
-          ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Cache Gradle (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/cache@v3
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-    - name: Cache Gradle (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/wrapper
-          ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Cache Gradle (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-    - name: Read and determine next Android version (TRUE STORE-FIRST)
-      working-directory: ./private-repo/android/app
-      run: |
-        # Get values from build.gradle for reference only
-        FILE_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
-        FILE_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
-        
-        echo "📋 Android Version Management (Store-First):"
-        echo "  File Version (ignored): $FILE_VERSION_NAME (build $FILE_VERSION_CODE)"
-        
-        # Version Strategy Logic
-        VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
-        CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
-        CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
-        
-        # Get store values
-        STORE_VERSION="${{ needs.google-play-query.outputs.latest_version_name }}"
-        STORE_BUILD="${{ needs.google-play-query.outputs.latest_build_number }}"
-        STORE_SUCCESS="${{ needs.google-play-query.outputs.query_success }}"
-        VERSION_SOURCE="${{ needs.google-play-query.outputs.version_source }}"
-        
-        echo ""
-        echo "🏪 Store Query Results:"
-        echo "  Store Version: $STORE_VERSION (build $STORE_BUILD)"
-        echo "  Version Source: $VERSION_SOURCE track"
-        echo "  Query Success: $STORE_SUCCESS"
-        echo "  Version Strategy: $VERSION_STRATEGY"
-        
-        # Use store version as base if successful, otherwise fall back to file
-        if [ "$STORE_SUCCESS" = "true" ] && [ -n "$STORE_VERSION" ] && [ "$STORE_VERSION" != "0.0.0" ]; then
-          CURRENT_VERSION="$STORE_VERSION"
-          echo "  ✅ Using store version as base: $CURRENT_VERSION"
-        else
-          CURRENT_VERSION="$FILE_VERSION_NAME"
-          echo "  ⚠️ Using file version as fallback: $CURRENT_VERSION"
-        fi
-        
-        # Parse current version components
-        IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-        MAJOR=${VERSION_PARTS[0]:-0}
-        MINOR=${VERSION_PARTS[1]:-0}
-        PATCH=${VERSION_PARTS[2]:-0}
-        
-        # Determine version name based on strategy
-        case "$VERSION_STRATEGY" in
-          "major")
-            NEXT_VERSION_NAME="$((MAJOR + 1)).0.0"
-            echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
-            ;;
-          "minor")
-            NEXT_VERSION_NAME="$MAJOR.$((MINOR + 1)).0"
-            echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
-            ;;
-          "patch")
-            NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
-            echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
-            ;;
-          "custom")
-            if [ -n "$CUSTOM_VERSION" ]; then
-              NEXT_VERSION_NAME="$CUSTOM_VERSION"
-              echo "  Custom version: $NEXT_VERSION_NAME"
-            else
-              NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  No custom version provided, using patch increment: $NEXT_VERSION_NAME"
-            fi
-            ;;
-          "build_only")
-            NEXT_VERSION_NAME="$CURRENT_VERSION"
-            echo "  Build only: keeping version $NEXT_VERSION_NAME"
-            ;;
-          *)  # "auto" or default
-            NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
-            echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION_NAME"
-            ;;
-        esac
-        
-        # Determine build number
-        if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
-          NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
-          echo "  Custom build number: $NEXT_BUILD"
-        else
-          # Use store build number if available
-          if [ "$STORE_SUCCESS" = "true" ] && [ "$STORE_BUILD" != "0" ]; then
-            NEXT_BUILD="$STORE_BUILD"  # Already has safety buffer
-            echo "  Build number: $NEXT_BUILD (from store with safety buffer)"
+      - name: Read and determine next Android version (TRUE STORE-FIRST)
+        working-directory: ./private-repo/android/app
+        run: |
+          # Get values from build.gradle for reference only
+          FILE_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
+          FILE_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
+          
+          echo "📋 Android Version Management (Store-First):"
+          echo "  File Version (ignored): $FILE_VERSION_NAME (build $FILE_VERSION_CODE)"
+          
+          # Version Strategy Logic
+          VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
+          CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
+          CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
+          
+          # Get store values
+          STORE_VERSION="${{ needs.google-play-query.outputs.latest_version_name }}"
+          STORE_BUILD="${{ needs.google-play-query.outputs.latest_build_number }}"
+          STORE_SUCCESS="${{ needs.google-play-query.outputs.query_success }}"
+          VERSION_SOURCE="${{ needs.google-play-query.outputs.version_source }}"
+          
+          echo ""
+          echo "🏪 Store Query Results:"
+          echo "  Store Version: $STORE_VERSION (build $STORE_BUILD)"
+          echo "  Version Source: $VERSION_SOURCE track"
+          echo "  Query Success: $STORE_SUCCESS"
+          echo "  Version Strategy: $VERSION_STRATEGY"
+          
+          # Use store version as base if successful, otherwise fall back to file
+          if [ "$STORE_SUCCESS" = "true" ] && [ -n "$STORE_VERSION" ] && [ "$STORE_VERSION" != "0.0.0" ]; then
+            CURRENT_VERSION="$STORE_VERSION"
+            echo "  ✅ Using store version as base: $CURRENT_VERSION"
           else
-            # Fallback to file + increment
-            NEXT_BUILD=$((FILE_VERSION_CODE + 1))
-            if [ "$NEXT_BUILD" -lt 100 ]; then
-              NEXT_BUILD=100
-            fi
-            echo "  Build number: $NEXT_BUILD (fallback from file)"
+            CURRENT_VERSION="$FILE_VERSION_NAME"
+            echo "  ⚠️ Using file version as fallback: $CURRENT_VERSION"
           fi
-        fi
-        
-        echo ""
-        echo "✅ Final Android Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
-        echo "📝 Version source: $([ "$STORE_SUCCESS" = "true" ] && echo "Google Play Store" || echo "build.gradle file")"
-        
-        # For the sed commands, we still need the file values
-        echo "CURRENT_VERSION_NAME=$FILE_VERSION_NAME" >> $GITHUB_ENV
-        echo "CURRENT_VERSION_CODE=$FILE_VERSION_CODE" >> $GITHUB_ENV
-        echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
-        echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+          
+          # Parse current version components
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]:-0}
+          MINOR=${VERSION_PARTS[1]:-0}
+          PATCH=${VERSION_PARTS[2]:-0}
+          
+          # Determine version name based on strategy
+          case "$VERSION_STRATEGY" in
+            "major")
+              NEXT_VERSION_NAME="$((MAJOR + 1)).0.0"
+              echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
+              ;;
+            "minor")
+              NEXT_VERSION_NAME="$MAJOR.$((MINOR + 1)).0"
+              echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
+              ;;
+            "patch")
+              NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
+              ;;
+            "custom")
+              if [ -n "$CUSTOM_VERSION" ]; then
+                NEXT_VERSION_NAME="$CUSTOM_VERSION"
+                echo "  Custom version: $NEXT_VERSION_NAME"
+              else
+                NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+                echo "  No custom version provided, using patch increment: $NEXT_VERSION_NAME"
+              fi
+              ;;
+            "build_only")
+              NEXT_VERSION_NAME="$CURRENT_VERSION"
+              echo "  Build only: keeping version $NEXT_VERSION_NAME"
+              ;;
+            *)  # "auto" or default
+              NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION_NAME"
+              ;;
+          esac
+          
+          # Determine build number
+          if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
+            NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
+            echo "  Custom build number: $NEXT_BUILD"
+          else
+            # Use store build number if available
+            if [ "$STORE_SUCCESS" = "true" ] && [ "$STORE_BUILD" != "0" ]; then
+              NEXT_BUILD="$STORE_BUILD"  # Already has safety buffer
+              echo "  Build number: $NEXT_BUILD (from store with safety buffer)"
+            else
+              # Fallback to file + increment
+              NEXT_BUILD=$((FILE_VERSION_CODE + 1))
+              if [ "$NEXT_BUILD" -lt 100 ]; then
+                NEXT_BUILD=100
+              fi
+              echo "  Build number: $NEXT_BUILD (fallback from file)"
+            fi
+          fi
+          
+          echo ""
+          echo "✅ Final Android Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
+          echo "📝 Version source: $([ "$STORE_SUCCESS" = "true" ] && echo "Google Play Store" || echo "build.gradle file")"
+          
+          # For the sed commands, we still need the file values
+          echo "CURRENT_VERSION_NAME=$FILE_VERSION_NAME" >> $GITHUB_ENV
+          echo "CURRENT_VERSION_CODE=$FILE_VERSION_CODE" >> $GITHUB_ENV
+          echo "NEXT_VERSION_NAME=$NEXT_VERSION_NAME" >> $GITHUB_ENV
+          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
 
-    - name: Update Android version for build
-      working-directory: ./private-repo/android/app
-      run: |
-        echo "🔄 Updating Android version using enhanced version control..."
-        echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
-        echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
-        
-        # Update version name
-        sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
-        
-        # Update version code  
-        sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
-        
-        # Verify the changes
-        echo "✅ Updated build.gradle:"
-        echo "$(grep versionName build.gradle)"
-        echo "$(grep "versionCode project.hasProperty" build.gradle)"
+      - name: Update Android version for build
+        working-directory: ./private-repo/android/app
+        run: |
+          echo "🔄 Updating Android version using enhanced version control..."
+          echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+          echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
+          
+          # Update version name
+          sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
+          
+          # Update version code  
+          sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
+          
+          # Verify the changes
+          echo "✅ Updated build.gradle:"
+          echo "$(grep versionName build.gradle)"
+          echo "$(grep "versionCode project.hasProperty" build.gradle)"
 
-    - name: Build Release AAB
-      working-directory: ./private-repo/android
-      run: |
-        ./gradlew bundleRelease \
-          -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-          -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-          -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-          -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
-          --stacktrace
+      - name: Build Release AAB
+        working-directory: ./private-repo/android
+        run: |
+          ./gradlew bundleRelease \
+            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
+            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
+            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
+            --stacktrace
 
-    - name: Prepare Google Play Credentials for Upload
-      env:
-        GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
-        GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
-      run: |
-        echo "🔑 Setting up Google Play credentials for upload..."
-        
-        if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
-          echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
-        elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
-          echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
-        else
-          echo "❌ No Google Play service account JSON available"
-          exit 1
-        fi
-        
-        echo "✅ Google Play credentials ready for upload"
+      - name: Prepare Google Play Credentials for Upload
+        env:
+          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+        run: |
+          echo "🔑 Setting up Google Play credentials for upload..."
+          
+          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
+            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
+            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+          
+          echo "✅ Google Play credentials ready for upload"
 
-    - name: Upload to Google Play
-      uses: r0adkll/upload-google-play@v1
-      with:
-        serviceAccountJson: /tmp/google-play-key.json
-        packageName: ${{ needs.setup.outputs.android_package_name }}
-        releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-        track: ${{ needs.setup.outputs.track }}
-        status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+      - name: Upload to Google Play
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJson: /tmp/google-play-key.json
+          packageName: ${{ needs.setup.outputs.android_package_name }}
+          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+          track: ${{ needs.setup.outputs.track }}
+          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
-    - name: Set Google Play Status
-      run: |
-        echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-        echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
+      - name: Set Google Play Status
+        run: |
+          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
 
-    - name: Commit version bump to private repo
-      working-directory: ./private-repo
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add android/app/build.gradle
-        git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
-        git push
+      - name: Commit version bump to private repo
+        working-directory: ./private-repo
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/build.gradle
+          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
+          git push
 
-# Summary
-summary:
-  runs-on: ubuntu-latest
-  needs: [setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, app-store-query, ios-build, android-build]
-  if: always()
-  steps:
-    - name: LittlePipes Build Summary
-      run: |
-        echo "🚀 LittlePipes Build Complete!"
-        echo "Target: ${{ needs.setup.outputs.target_repo }}"
-        echo "Ref: ${{ needs.setup.outputs.target_ref }}"
-        echo "Actor: ${{ needs.setup.outputs.trigger_actor }}"
-        echo "Platform: ${{ needs.setup.outputs.build_ios }} iOS, ${{ needs.setup.outputs.build_android }} Android"
-        echo "Version Strategy: ${{ needs.setup.outputs.version_strategy }}"
-        
-        if [ "${{ needs.setup.outputs.dev_mode }}" = "true" ]; then
-          echo "🔧 DEV MODE: Tests were skipped for pipeline development"
-        else
-          echo "UI Tests: iOS→${{ needs.ios-ui-tests.outputs.ui_tests_passed }}, Android→${{ needs.android-ui-tests.outputs.ui_tests_passed }}"
-        fi
-        
-        echo "Store Queries:"
-        echo "  Google Play: ${{ needs.google-play-query.outputs.query_success }} (version ${{ needs.google-play-query.outputs.latest_version_name }}, build ${{ needs.google-play-query.outputs.latest_build_number }})"
-        echo "  App Store: ${{ needs.app-store-query.outputs.query_success }} (build ${{ needs.app-store-query.outputs.latest_build_number }})"
-        echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
-        echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
+  # Summary
+  summary:
+    runs-on: ubuntu-latest
+    needs: [setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, app-store-query, ios-build, android-build]
+    if: always()
+    steps:
+      - name: LittlePipes Build Summary
+        run: |
+          echo "🚀 LittlePipes Build Complete!"
+          echo "Target: ${{ needs.setup.outputs.target_repo }}"
+          echo "Ref: ${{ needs.setup.outputs.target_ref }}"
+          echo "Actor: ${{ needs.setup.outputs.trigger_actor }}"
+          echo "Platform: ${{ needs.setup.outputs.build_ios }} iOS, ${{ needs.setup.outputs.build_android }} Android"
+          echo "Version Strategy: ${{ needs.setup.outputs.version_strategy }}"
+          
+          if [ "${{ needs.setup.outputs.dev_mode }}" = "true" ]; then
+            echo "🔧 DEV MODE: Tests were skipped for pipeline development"
+          else
+            echo "UI Tests: iOS→${{ needs.ios-ui-tests.outputs.ui_tests_passed }}, Android→${{ needs.android-ui-tests.outputs.ui_tests_passed }}"
+          fi
+          
+          echo "Store Queries:"
+          echo "  Google Play: ${{ needs.google-play-query.outputs.query_success }} (version ${{ needs.google-play-query.outputs.latest_version_name }}, build ${{ needs.google-play-query.outputs.latest_build_number }})"
+          echo "  App Store: ${{ needs.app-store-query.outputs.query_success }} (build ${{ needs.app-store-query.outputs.latest_build_number }})"
+          echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
+          echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
         

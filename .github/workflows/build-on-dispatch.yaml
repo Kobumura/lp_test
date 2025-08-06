@@ -300,7 +300,7 @@ jobs:
   echo "✅ API key file created with properly escaped multiline key"
 
 # Don't echo the actual JSON to avoid leaking secrets in logs
-echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
+  echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
 - name: Query App Store Connect (Fixed Lane Name)
   id: query

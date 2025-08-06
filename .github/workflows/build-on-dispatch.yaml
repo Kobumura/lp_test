@@ -288,940 +288,940 @@ jobs:
           
           # Create API key JSON with properly escaped key
           cat > ios/fastlane/api_key.json << EOF
-  {
-    "key_id": "$ASC_API_KEY_ID",
-    "issuer_id": "$ASC_ISSUER_ID",
-    "key": "$ESCAPED_KEY",
-    "duration": 1200,
-    "in_house": false
-  }
-  EOF
-  
-  echo "✅ API key file created with properly escaped multiline key"
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID",
+            "key": "$ESCAPED_KEY",
+            "duration": 1200,
+            "in_house": false
+          }
+          EOF
+          
+          echo "✅ API key file created with properly escaped multiline key"
+          
+          # Don't echo the actual JSON to avoid leaking secrets in logs
+          echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
-# Don't echo the actual JSON to avoid leaking secrets in logs
-  echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
-
-- name: Query App Store Connect (Fixed Lane Name)
-  id: query
-  working-directory: ios
-  run: |
-    echo "🔍 Querying App Store Connect for latest TestFlight build..."
-    echo "📋 Bundle ID: ${{ needs.setup.outputs.ios_bundle_id }}"
-    echo "📁 Working from: $(pwd)"
-    
-    # Create Fastfile with fixed lane name (query_build_number instead of get_build_number)
-    cat > fastlane/Fastfile << 'EOF'
-    default_platform(:ios)
-    
-    platform :ios do
-      desc "Query TestFlight build number"
-      lane :query_build_number do
-        begin
-          build_num = latest_testflight_build_number(
-            api_key_path: "fastlane/api_key.json",
-            app_identifier: ENV["BUNDLE_ID"]
-          )
-          puts "SUCCESS:#{build_num}"
-        rescue => e
-          puts "ERROR:#{e.message}"
-          exit 1
-        end
-      end
-    end
-    EOF
-    
-    # Set environment for Fastlane
-    export BUNDLE_ID="${{ needs.setup.outputs.ios_bundle_id }}"
-    export FASTLANE_OPT_OUT_USAGE="YES"
-    
-    # Run the query with the fixed lane name
-    if OUTPUT=$(fastlane query_build_number 2>&1); then
-      echo "✅ Fastlane query completed"
-      # Don't echo full output to avoid leaking secrets
-    
-      # Parse the result
-      if echo "$OUTPUT" | grep -q "SUCCESS:"; then
-        LATEST_ASC_BUILD=$(echo "$OUTPUT" | grep "SUCCESS:" | sed 's/.*SUCCESS://' | tr -d ' ')
-        if [[ "$LATEST_ASC_BUILD" =~ ^[0-9]+$ ]] && [ "$LATEST_ASC_BUILD" -gt 0 ]; then
-          SUCCESS="true"
-          echo "🎯 Found build number: $LATEST_ASC_BUILD"
-        else
-          LATEST_ASC_BUILD="0"
-          SUCCESS="false"
-          echo "⚠️ Invalid build number format"
-        fi
-      else
-        LATEST_ASC_BUILD="0"
-        SUCCESS="false"
-        echo "❌ No SUCCESS marker found in output"
-      fi
-    else
-      echo "❌ Fastlane query failed"
-      LATEST_ASC_BUILD="0"
-      SUCCESS="false"
-    fi
-    
-    echo "📋 Final result: LATEST_ASC_BUILD=$LATEST_ASC_BUILD, SUCCESS=$SUCCESS"
-    echo "build_number=$LATEST_ASC_BUILD" >> $GITHUB_OUTPUT
-    echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-
-# Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
-google-play-query:
-  runs-on: ubuntu-latest
-  needs: setup
-  if: needs.setup.outputs.build_android == 'true'
-  outputs:
-    latest_version_name: ${{ steps.query.outputs.version_name }}
-    latest_build_number: ${{ steps.query.outputs.build_number }}
-    query_success: ${{ steps.query.outputs.success }}
-    version_source: ${{ steps.query.outputs.version_source }}
-  steps:
-    - name: Prepare Google Play Credentials
-      env:
-        GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
-        GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
-      run: |
-        echo "🔑 Setting up Google Play credentials..."
-        
-        if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
-          echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
-        elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
-          echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
-        else
-          echo "❌ No Google Play service account JSON available"
-          exit 1
-        fi
-        
-        # Verify the JSON file is valid
-        echo "🔍 Validating JSON file..."
-        if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
-          echo "✅ JSON file is valid"
-        else
-          echo "❌ JSON file is invalid"
-          exit 1
-        fi
-
-    - name: Install Codemagic CLI Tools
-      run: |
-        echo "📦 Installing Codemagic CLI tools..."
-        pip install --default-timeout=100 codemagic-cli-tools
-        echo "✅ Codemagic CLI tools installed"
-        google-play --version
-
-    - name: Query Google Play Console for Full Version Info
-      id: query
-      run: |
-        echo "🔍 Querying Google Play Console for full version information..."
-        echo "📋 Package Name: ${{ needs.setup.outputs.android_package_name }}"
-        
-        # Create Python script for version parsing
-        cat > parse_versions.py << 'EOF'
-        import sys
-        import json
-        import re
-        
-        def parse_version(version_string):
-            """Parse version string and return major, minor, patch"""
-            match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_string)
-            if match:
-                return {
-                    'major': int(match.group(1)),
-                    'minor': int(match.group(2)),
-                    'patch': int(match.group(3)),
-                    'full': f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-                }
-            return None
-        
-        def compare_versions(v1, v2):
-            """Return True if v1 > v2 (semantic version comparison)"""
-            if not v1 or not v2:
-                return bool(v1)
-        
-            if v1['major'] != v2['major']:
-                return v1['major'] > v2['major']
-            if v1['minor'] != v2['minor']:
-                return v1['minor'] > v2['minor']
-            return v1['patch'] > v2['patch']
-        
-        # Read track data from stdin
-        track_data = sys.stdin.read()
-        
-        # Extract track information
-        tracks = re.findall(r'Track: (\w+)\nReleases:.*?Name: ([^\n]+).*?Version codes:\s*\n\s*- (\d+)', track_data, re.DOTALL)
-        
-        versions = {}
-        highest_version_obj = None
-        highest_version_track = None
-        highest_version_build = 0
-        highest_build_overall = 0
-        
-        print("📊 Found versions in tracks:")
-        print("-" * 50)
-        
-        for track, version_name, build_code in tracks:
-            build_num = int(build_code)
-            parsed_version = parse_version(version_name)
-        
-            if build_num > highest_build_overall:
-                highest_build_overall = build_num
-        
-            if parsed_version:
-                versions[track] = {
-                    'version': parsed_version['full'],
-                    'build': build_num,
-                    'raw_name': version_name
-                }
-        
-                print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
-        
-                # Check if this is the highest VERSION (not build)
-                if compare_versions(parsed_version, highest_version_obj):
-                    highest_version_obj = parsed_version
-                    highest_version_track = track
-                    highest_version_build = build_num
-        
-        print("-" * 50)
-        
-        # Output results
-        if highest_version_obj:
-            print(f"\n✅ Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
-            print(f"📦 Highest BUILD overall: {highest_build_overall}")
-        
-            # Use the highest semantic version, but ensure build number is always higher
-            safe_build = max(highest_build_overall + 10, highest_version_build + 10)
-        
-            print(f"HIGHEST_VERSION={highest_version_obj['full']}")
-            print(f"HIGHEST_BUILD={safe_build}")
-            print(f"VERSION_SOURCE={highest_version_track}")
-            print(f"ALL_VERSIONS={json.dumps(versions)}")
-        else:
-            print("HIGHEST_VERSION=0.0.0")
-            print("HIGHEST_BUILD=0")
-            print("VERSION_SOURCE=none")
-            print("ALL_VERSIONS={}")
-        EOF
-        
-        # Query all tracks and capture output
-        TRACK_OUTPUT=""
-        for TRACK in "internal" "alpha" "beta" "production"; do
-          echo "🔍 Checking track: $TRACK"
-        
-          if OUTPUT=$(google-play tracks get \
-              --package-name "${{ needs.setup.outputs.android_package_name }}" \
-              --track "$TRACK" \
-              --credentials "@file:/tmp/google-play-key.json" 2>&1); then
-            TRACK_OUTPUT="${TRACK_OUTPUT}${OUTPUT}\n"
-            echo "✅ Got track data"
-          fi
-        done
-        
-        # Parse the track data with version-first logic
-        echo -e "$TRACK_OUTPUT" | python3 parse_versions.py > version_results.txt
-        
-        # Read the results
-        HIGHEST_VERSION="0.0.0"
-        HIGHEST_BUILD="0"
-        VERSION_SOURCE="none"
-        ALL_VERSIONS="{}"
-        SUCCESS="false"
-        
-        if [ -f version_results.txt ]; then
-          # Show the analysis output
-          cat version_results.txt
-        
-          # Extract the variables
-          while IFS= read -r line; do
-            if [[ $line == HIGHEST_VERSION=* ]] || [[ $line == HIGHEST_BUILD=* ]] || [[ $line == VERSION_SOURCE=* ]] || [[ $line == ALL_VERSIONS=* ]]; then
-              eval "$line"
-            fi
-          done < version_results.txt
-        
-          if [ "$HIGHEST_VERSION" != "0.0.0" ] && [ "$HIGHEST_BUILD" -gt 0 ]; then
-            SUCCESS="true"
-          fi
-        fi
-        
-        echo ""
-        echo "📋 Final results:"
-        echo "  Version: $HIGHEST_VERSION (from $VERSION_SOURCE track)"
-        echo "  Build: $HIGHEST_BUILD (with safety buffer)"
-        echo "  Success: $SUCCESS"
-        
-        echo "version_name=$HIGHEST_VERSION" >> $GITHUB_OUTPUT
-        echo "build_number=$HIGHEST_BUILD" >> $GITHUB_OUTPUT
-        echo "version_source=$VERSION_SOURCE" >> $GITHUB_OUTPUT
-        echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-
-# iOS UI Tests - SKIPPED IN DEV MODE
-ios-ui-tests:
-  runs-on: ${{ needs.setup.outputs.ios_runner }}
-  needs: [setup, unit-tests]
-  if: needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_ui_tests == 'true' && needs.setup.outputs.dev_mode == 'false' && (success() || needs.setup.outputs.fail_fast == 'false')
-  outputs:
-    ui_test_status: ${{ steps.ui_test_results.outputs.status }}
-    ui_test_details: ${{ steps.ui_test_results.outputs.details }}
-    ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
-  steps:
-    - name: Start UI Test Timer
-      run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
-
-    - name: Checkout Private Repository
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ needs.setup.outputs.target_repo }}
-        ref: ${{ needs.setup.outputs.target_ref }}
-        token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
-        path: ./private-repo
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
-
-    - name: Install Dependencies
-      working-directory: ./private-repo
-      run: yarn install --frozen-lockfile
-
-    # Maestro Setup with proper PATH persistence
-    - name: Setup Maestro
-      run: |
-        echo "📦 Installing Maestro..."
-        curl -Ls "https://get.maestro.mobile.dev" | bash
-        echo "$HOME/.maestro/bin" >> $GITHUB_PATH
-        $HOME/.maestro/bin/maestro --version
-
-    - name: WarpBuild Xcode & CocoaPods Compatibility
-      if: needs.setup.outputs.use_warpbuild == 'true'
-      working-directory: ./private-repo
-      run: |
-        echo "🚀 Configuring WarpBuild for optimal performance..."
-        sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
-        xcodebuild -version
-        cd ios
-        rm -rf Pods/ Podfile.lock
-        rm -rf ~/Library/Caches/CocoaPods
-        pod repo update --silent
-        echo "✅ WarpBuild compatibility configuration complete"
-        cd ..
-
-    - name: Simple Xcode Setup
-      if: needs.setup.outputs.use_warpbuild == 'false'
-      run: |
-        echo "🔧 Using available Xcode installation..."
-        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-        xcodebuild -version
-
-    - name: Install CocoaPods Dependencies
-      working-directory: ./private-repo/ios
-      run: |
-        if [[ "${{ needs.setup.outputs.use_warpbuild }}" == "true" ]]; then
-          echo "📦 Installing CocoaPods with WarpBuild optimizations..."
-          pod install --clean-install --repo-update
-        else
-          echo "📦 Installing CocoaPods with standard configuration..."
-          pod install
-        fi
-        echo "✅ CocoaPods installation complete"
-
-    - name: Start Metro Bundler
-      working-directory: ./private-repo
-      run: |
-        echo "🚀 Starting Metro bundler..."
-        npx react-native start --reset-cache > metro.log 2>&1 &
-        METRO_PID=$!
-        echo $METRO_PID > metro.pid
-        echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
-        
-        echo "⏱️ Waiting for Metro to be ready..."
-        for i in {1..60}; do
-          if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
-            echo "✅ Metro is ready after ${i} attempts"
-            break
-          fi
-          if [ $i -eq 60 ]; then
-            echo "❌ Metro failed to start after 60 attempts"
-            cat metro.log
-            exit 1
-          fi
-          echo "⏳ Metro not ready yet, attempt $i/60..."
-          sleep 2
-        done
-        
-        echo "⏱️ Additional wait for Metro stability..."
-        sleep 15
-
-    - name: Start iOS Simulator
-      run: |
-        echo "🍎 Creating iOS Simulator..."
-        SIMULATOR_ID=$(xcrun simctl create "Test-iPhone" "iPhone 15" 2>/dev/null || \
-                      xcrun simctl create "Test-iPhone" "iPhone 14" 2>/dev/null || \
-                      xcrun simctl create "Test-iPhone" "iPhone 13" 2>/dev/null)
-        
-        echo "SIMULATOR_ID=$SIMULATOR_ID" >> $GITHUB_ENV
-        echo "Created simulator: $SIMULATOR_ID"
-        
-        xcrun simctl boot $SIMULATOR_ID
-        
-        echo "⏱️ Waiting for simulator to be ready..."
-        for i in {1..30}; do
-          if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
-            echo "✅ Simulator is booted after ${i} attempts"
-            break
-          fi
-          if [ $i -eq 30 ]; then
-            echo "❌ Simulator failed to boot after 30 attempts"
-            exit 1
-          fi
-          echo "⏳ Simulator not ready yet, attempt $i/30..."
-          sleep 3
-        done
-        
-        echo "⏱️ Additional wait for simulator stability..."
-        sleep 10
-
-    - name: Build iOS App for Testing
-      working-directory: ./private-repo
-      run: |
-        echo "🔨 Building iOS app for simulator..."
-        cd ios
-        xcodebuild \
-          -workspace ${{ needs.setup.outputs.ios_workspace }} \
-          -scheme ${{ needs.setup.outputs.ios_scheme }} \
-          -configuration Debug \
-          -sdk iphonesimulator \
-          -derivedDataPath ./build \
-          build
-        echo "✅ iOS app built successfully for testing"
-
-    - name: Install App on Simulator
-      working-directory: ./private-repo
-      run: |
-        echo "📲 Installing app on simulator..."  
-        APP_PATH=$(find ios/build -name "${{ needs.setup.outputs.ios_scheme }}.app" | head -1)  
-        echo "App path: $APP_PATH"  
-        xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"  
-        echo "✅ App installed on simulator"
-
-    - name: Launch App and Wait for Bundle
-      run: |
-        echo "🚀 Launching app..."
-        xcrun simctl launch "$SIMULATOR_ID" ${{ needs.setup.outputs.ios_bundle_id }}
-        echo "⏱️ Waiting for app installation and initial load..."
-        sleep 30
-
-    - name: Run Maestro UI Tests
-      working-directory: ./private-repo
-      run: |
-        echo "🧪 Running Maestro UI tests..."
-        
-        UI_TEST_SUCCESS=true
-        if command -v maestro &> /dev/null; then
-          maestro test .maestro/signup-flow.yml || UI_TEST_SUCCESS=false
-        else
-          UI_TEST_SUCCESS=false
-        fi
-        
-        echo "UI_TEST_SUCCESS=$UI_TEST_SUCCESS" >> $GITHUB_ENV
-
-    - name: Set UI Test Results
-      id: ui_test_results
-      if: always()
-      run: |
-        UI_TEST_END=$(date +%s)
-        UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
-        
-        if [[ "$UI_TEST_SUCCESS" == "true" ]]; then
-          echo "status=✅ iOS UI Tests Passed" >> $GITHUB_OUTPUT
-          echo "details=iOS Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
-          echo "passed=true" >> $GITHUB_OUTPUT
-        else
-          echo "status=❌ iOS UI Tests Failed" >> $GITHUB_OUTPUT
-          echo "details=iOS Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
-          echo "passed=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Cleanup UI Tests
-      if: always()
-      working-directory: ./private-repo
-      run: |
-        if [ -f metro.pid ]; then
-          kill $(cat metro.pid) 2>/dev/null || true
-        fi
-        if [ -n "$SIMULATOR_ID" ]; then
-          xcrun simctl shutdown $SIMULATOR_ID 2>/dev/null || true
-          xcrun simctl delete $SIMULATOR_ID 2>/dev/null || true
-        fi
-
-    - name: Upload UI Test Artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ios-ui-test-artifacts
-        path: |
-          ./private-repo/metro.log
-          ~/.maestro/tests/
-          ~/.maestro/screenshots/
-        retention-days: 3
-
-    - name: Check UI Test Failure
-      if: env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast == 'true'
-      run: exit 1
-
-# Android UI Tests - SKIPPED IN DEV MODE
-android-ui-tests:
-  runs-on: ${{ needs.setup.outputs.android_runner }}
-  timeout-minutes: 40
-  needs: [setup, unit-tests]
-  if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && needs.setup.outputs.dev_mode == 'false' && (success() || needs.setup.outputs.fail_fast == 'false')
-  outputs:
-    ui_test_status: ${{ steps.ui_test_results.outputs.status }}
-    ui_test_details: ${{ steps.ui_test_results.outputs.details }}
-    ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
-  steps:
-    - name: Start UI Test Timer
-      run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
-
-    - name: Checkout Private Repository
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ needs.setup.outputs.target_repo }}
-        ref: ${{ needs.setup.outputs.target_ref }}
-        token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
-        path: ./private-repo
-
-    - name: Setup Node.js (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
-
-    - name: Setup Node.js (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
-
-    - name: Install Dependencies
-      working-directory: ./private-repo
-      run: yarn install --frozen-lockfile
-
-    - name: Free Disk Space (Ubuntu)
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: false
-        android: false
-        dotnet: true
-        haskell: true
-        large-packages: true
-        docker-images: true
-        swap-storage: true
-
-    - name: Setup Java (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/setup-java@v4
-      with:
-        java-version: 17
-        distribution: adopt
-
-    - name: Setup Java (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/setup-java@v4
-      with:
-        java-version: 17
-        distribution: adopt
-
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Enable KVM group perms
-      run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-
-    # Maestro Setup with proper PATH persistence
-    - name: Setup Maestro
-      run: |
-        echo "📦 Installing Maestro..."
-        curl -Ls "https://get.maestro.mobile.dev" | bash
-        echo "$HOME/.maestro/bin" >> $GITHUB_PATH
-        $HOME/.maestro/bin/maestro --version
-
-    - name: Backup & enhance gradle.properties
-      working-directory: ./private-repo
-      run: |
-        cp android/gradle.properties android/gradle.properties.backup || echo "No gradle.properties"
-        echo "" >> android/gradle.properties
-        cat >> android/gradle.properties << EOF
-        org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-        org.gradle.daemon=true
-        org.gradle.parallel=true
-        org.gradle.configureondemand=true
-        org.gradle.caching=true
-        android.useAndroidX=true
-        android.enableJetifier=true
-        org.gradle.unsafe.configuration-cache=false
-        EOF
-
-    - name: Cache Gradle Wrapper (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/cache@v3
-      with:
-        path: ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
-
-    - name: Cache Gradle Wrapper (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/cache@v3
-      with:
-        path: ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
-
-    - name: Cache Gradle Dependencies (buildjet)
-      if: needs.setup.outputs.use_buildjet == 'true'
-      uses: buildjet/cache@v3
-      with:
-        path: ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-caches-
-
-    - name: Cache Gradle Dependencies (default)
-      if: needs.setup.outputs.use_buildjet == 'false'
-      uses: actions/cache@v3
-      with:
-        path: ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-caches-
-
-    - name: Gradle clean
-      working-directory: ./private-repo/android
-      run: ./gradlew clean
-
-    - name: Start Metro Bundler
-      working-directory: ./private-repo
-      run: |
-        echo "🚀 Starting Metro bundler..."
-        npx react-native start --reset-cache > metro.log 2>&1 &
-        METRO_PID=$!
-        echo $METRO_PID > metro.pid
-        echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
-        
-        echo "⏱️ Waiting for Metro to be ready..."
-        for i in {1..60}; do
-          if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
-            echo "✅ Metro is ready after ${i} attempts"
-            break
-          fi
-          if [ $i -eq 60 ]; then
-            echo "❌ Metro failed to start after 60 attempts"
-            cat metro.log
-            exit 1
-          fi
-          echo "⏳ Metro not ready yet, attempt $i/60..."
-          sleep 2
-        done
-        
-        echo "⏱️ Additional wait for Metro stability..."
-        sleep 15
-
-    - name: Build Debug APK
-      working-directory: ./private-repo/android
-      timeout-minutes: 15
-      run: |
-        echo "🔨 Building Android app..."
-        ./gradlew assembleDebug --stacktrace
-        echo "✅ Android APK built successfully"
-        
-        # Verify APK exists
-        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-        if [ ! -f "$APK_PATH" ]; then
-          echo "❌ APK not found at expected location: $APK_PATH"
-          exit 1
-        fi
-
-    - name: Run Android Maestro UI Tests
-      uses: reactivecircus/android-emulator-runner@v2
-      timeout-minutes: 25
-      with:
-        api-level: 33
-        target: google_apis
-        arch: x86_64
-        profile: Nexus 6
-        force-avd-creation: false
-        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-        disable-animations: true
-        working-directory: ./private-repo
-        script: |
-          TEST_FILE="signup-flow.yml"
-          echo "📱 Installing APK on emulator..."
-          adb install android/app/build/outputs/apk/debug/app-debug.apk
-          echo "🚀 Launching app..."
-          adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity
-          sleep 3
-          echo "🧪 Running Maestro UI tests"
-          maestro test ".maestro/$TEST_FILE"
-          echo "✅ Android UI tests completed successfully"
-
-    - name: Set UI Test Results
-      id: ui_test_results
-      if: always()
-      run: |
-        UI_TEST_END=$(date +%s)
-        UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
-        if [[ "${{ job.status }}" == "success" ]]; then
-          echo "status=✅ Android UI Tests Passed" >> $GITHUB_OUTPUT
-          echo "details=Android Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
-          echo "passed=true" >> $GITHUB_OUTPUT
-        else
-          echo "status=❌ Android UI Tests Failed" >> $GITHUB_OUTPUT
-          echo "details=Android Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
-          echo "passed=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Cleanup Android UI Tests
-      if: always()
-      working-directory: ./private-repo
-      run: |
-        if [ -f metro.pid ]; then
-          kill $(cat metro.pid) 2>/dev/null || true
-        fi
-
-    - name: Upload UI Test Artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-ui-test-artifacts
-        path: |
-          ./private-repo/metro.log
-          ~/.maestro/tests/
-          ~/.maestro/screenshots/
-        retention-days: 3
-
-    - name: Check UI Test Failure
-      if: failure() && needs.setup.outputs.fail_fast == 'true'
-      run: exit 1
-
-# iOS Build & Deploy - FIXED VERSION LOGIC WITH DEBUGGING
-ios-build:
-  runs-on: ${{ needs.setup.outputs.ios_runner }}
-  needs: [setup, ios-ui-tests, app-store-query]
-  if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
-  env:
-    IOS_DIR: ${{ github.workspace }}/private-repo/ios
-    ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/Archive.xcarchive
-    EXPORT_PATH: ${{ github.workspace }}/private-repo/ios/build/export
-    MATCH_SSH_KEY_B64: ${{ github.event.client_payload.secrets.MATCH_SSH_KEY_B64 || '' }}
-    MATCH_SSH_KEY_REPO: ${{ secrets.MATCH_SSH_KEY || '' }}
-    MATCH_GIT_URL: ${{ github.event.client_payload.secrets.MATCH_GIT_URL || secrets.MATCH_GIT_URL }}
-    MATCH_PASSWORD: ${{ github.event.client_payload.secrets.MATCH_PASSWORD || secrets.MATCH_PASSWORD }}
-    ASC_API_KEY_ID: ${{ github.event.client_payload.secrets.ASC_API_KEY_ID || secrets.ASC_API_KEY_ID }}
-    ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
-    ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
-    ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
-  steps:
-    # 🔧 DEV MODE WARNING
-    - name: Development Mode Warning
-      if: needs.setup.outputs.dev_mode == 'true'
-      run: |
-        echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
-        echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
-        echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
-        echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
-
-    - name: Start Build Timer
-      run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
-
-    - name: Check Prerequisites for Store Distribution
-      if: needs.setup.outputs.track == 'production'
-      run: |
-        UI_TESTS_PASSED="${{ needs.ios-ui-tests.outputs.passed }}"
-        if [[ "$UI_TESTS_PASSED" != "true" ]]; then exit 1; fi
-
-    - name: Checkout Private Repository
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ needs.setup.outputs.target_repo }}
-        ref: ${{ needs.setup.outputs.target_ref }}
-        token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
-        path: ./private-repo
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'yarn'
-        cache-dependency-path: './private-repo/yarn.lock'
-
-    - name: Install Dependencies
-      working-directory: ./private-repo
-      run: yarn install --frozen-lockfile
-
-    - name: Read and determine next iOS version (FIXED WITH DEBUGGING)
-      working-directory: ./private-repo
-      run: |
-        PBX="ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj"
-        CURRENT_VERSION=$(grep -o "MARKETING_VERSION = [^;]*" $PBX | head -1 | sed 's/MARKETING_VERSION = //;s/;//')
-        CURRENT_BUILD=$(grep -o "CURRENT_PROJECT_VERSION = [^;]*" $PBX | head -1 | sed 's/CURRENT_PROJECT_VERSION = //;s/;//')
-        
-        # Parse current version components
-        IFS='.' read -ra V <<< "$CURRENT_VERSION"
-        MAJOR=${V[0]}
-        MINOR=${V[1]}
-        PATCH=${V[2]}
-        
-        # Version Strategy Logic
-        VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
-        CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
-        CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
-        
-        echo "📋 iOS Version Management:"
-        echo "  Current Version: $CURRENT_VERSION (build $CURRENT_BUILD)"
-        echo "  Version Strategy: $VERSION_STRATEGY"
-        
-        # Determine version name based on strategy
-        case "$VERSION_STRATEGY" in
-          "major")
-            NEXT_VERSION="$((MAJOR + 1)).0.0"
-            echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION"
-            ;;
-          "minor")
-            NEXT_VERSION="$MAJOR.$((MINOR + 1)).0"
-            echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION"
-            ;;
-          "patch")
-            NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-            echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION"
-            ;;
-          "custom")
-            if [ -n "$CUSTOM_VERSION" ]; then
-              NEXT_VERSION="$CUSTOM_VERSION"
-              echo "  Custom version: $NEXT_VERSION"
+      - name: Query App Store Connect (Fixed Lane Name)
+        id: query
+        working-directory: ios
+        run: |
+          echo "🔍 Querying App Store Connect for latest TestFlight build..."
+          echo "📋 Bundle ID: ${{ needs.setup.outputs.ios_bundle_id }}"
+          echo "📁 Working from: $(pwd)"
+          
+          # Create Fastfile with fixed lane name (query_build_number instead of get_build_number)
+          cat > fastlane/Fastfile << 'EOF'
+          default_platform(:ios)
+          
+          platform :ios do
+            desc "Query TestFlight build number"
+            lane :query_build_number do
+              begin
+                build_num = latest_testflight_build_number(
+                  api_key_path: "fastlane/api_key.json",
+                  app_identifier: ENV["BUNDLE_ID"]
+                )
+                puts "SUCCESS:#{build_num}"
+              rescue => e
+                puts "ERROR:#{e.message}"
+                exit 1
+              end
+            end
+          end
+          EOF
+          
+          # Set environment for Fastlane
+          export BUNDLE_ID="${{ needs.setup.outputs.ios_bundle_id }}"
+          export FASTLANE_OPT_OUT_USAGE="YES"
+          
+          # Run the query with the fixed lane name
+          if OUTPUT=$(fastlane query_build_number 2>&1); then
+            echo "✅ Fastlane query completed"
+            # Don't echo full output to avoid leaking secrets
+          
+            # Parse the result
+            if echo "$OUTPUT" | grep -q "SUCCESS:"; then
+              LATEST_ASC_BUILD=$(echo "$OUTPUT" | grep "SUCCESS:" | sed 's/.*SUCCESS://' | tr -d ' ')
+              if [[ "$LATEST_ASC_BUILD" =~ ^[0-9]+$ ]] && [ "$LATEST_ASC_BUILD" -gt 0 ]; then
+                SUCCESS="true"
+                echo "🎯 Found build number: $LATEST_ASC_BUILD"
+              else
+                LATEST_ASC_BUILD="0"
+                SUCCESS="false"
+                echo "⚠️ Invalid build number format"
+              fi
             else
-              NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  No custom version provided, using patch increment: $NEXT_VERSION"
+              LATEST_ASC_BUILD="0"
+              SUCCESS="false"
+              echo "❌ No SUCCESS marker found in output"
             fi
-            ;;
-          "build_only")
-            NEXT_VERSION="$CURRENT_VERSION"
-            echo "  Build only: keeping version $NEXT_VERSION"
-            ;;
-          *)  # "auto" or default
-            NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-            echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION"
-            ;;
-        esac
-        
-        # Determine build number - ENHANCED DEBUGGING
-        echo ""
-        echo "🔍 DEBUG: App Store Query Results:"
-        echo "  needs.app-store-query.outputs.latest_build_number = '${{ needs.app-store-query.outputs.latest_build_number }}'"
-        echo "  needs.app-store-query.outputs.query_success = '${{ needs.app-store-query.outputs.query_success }}'"
-        
-        if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
-          NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
-          echo "  Custom build number: $NEXT_BUILD"
-        else
-          # Store-first approach for build number
-          LATEST_APP_STORE_BUILD="${{ needs.app-store-query.outputs.latest_build_number }}"
-          APP_STORE_SUCCESS="${{ needs.app-store-query.outputs.query_success }}"
-        
-          echo ""
-          echo "🔍 DEBUG: Local Variables:"
-          echo "  LATEST_APP_STORE_BUILD = '$LATEST_APP_STORE_BUILD'"
-          echo "  APP_STORE_SUCCESS = '$APP_STORE_SUCCESS'"
-          echo "  CURRENT_BUILD = '$CURRENT_BUILD'"
-        
-          # FIX: Check for string "true" and non-empty/non-zero build number
-          if [ "$APP_STORE_SUCCESS" = "true" ] && [ -n "$LATEST_APP_STORE_BUILD" ] && [ "$LATEST_APP_STORE_BUILD" != "0" ]; then
-            NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
-            STRATEGY="App Store Connect + 1 (store-first)"
-            echo "  ✅ Using store-first approach"
-            echo "  Build number: $LATEST_APP_STORE_BUILD → $NEXT_BUILD ($STRATEGY)"
           else
-            # Fallback logic with better handling
-            if [ -n "$CURRENT_BUILD" ] && [ "$CURRENT_BUILD" -ge 100 ]; then
-              FALLBACK_BUILD=$((CURRENT_BUILD + 1))
-            else
-              FALLBACK_BUILD=101  # Start from 101 to avoid conflict with existing 100
-            fi
-            NEXT_BUILD="$FALLBACK_BUILD"
-            STRATEGY="Fallback (store query failed or returned invalid data)"
-            echo "  ⚠️ Using fallback approach"
-            echo "  Build number: $NEXT_BUILD ($STRATEGY)"
-            echo "  Reason: APP_STORE_SUCCESS='$APP_STORE_SUCCESS', LATEST_APP_STORE_BUILD='$LATEST_APP_STORE_BUILD'"
+            echo "❌ Fastlane query failed"
+            LATEST_ASC_BUILD="0"
+            SUCCESS="false"
           fi
-        fi
-        
-        echo ""
-        echo "✅ Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
-        echo "📝 Strategy used: $STRATEGY"
-        
-        echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
-        echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+          
+          echo "📋 Final result: LATEST_ASC_BUILD=$LATEST_ASC_BUILD, SUCCESS=$SUCCESS"
+          echo "build_number=$LATEST_ASC_BUILD" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
-    - name: Update iOS version for build
-      working-directory: ./private-repo
-      run: |
-        PBX="ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj"
-        sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = ${{ env.NEXT_VERSION_NAME }}/" $PBX
-        sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${{ env.NEXT_VERSION_CODE }}/" $PBX
+  # Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
+  google-play-query:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.build_android == 'true'
+    outputs:
+      latest_version_name: ${{ steps.query.outputs.version_name }}
+      latest_build_number: ${{ steps.query.outputs.build_number }}
+      query_success: ${{ steps.query.outputs.success }}
+      version_source: ${{ steps.query.outputs.version_source }}
+    steps:
+      - name: Prepare Google Play Credentials
+        env:
+          GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
+          GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
+        run: |
+          echo "🔑 Setting up Google Play credentials..."
+          
+          if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
+            echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
+          elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
+            echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
+          else
+            echo "❌ No Google Play service account JSON available"
+            exit 1
+          fi
+          
+          # Verify the JSON file is valid
+          echo "🔍 Validating JSON file..."
+          if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
+            echo "✅ JSON file is valid"
+          else
+            echo "❌ JSON file is invalid"
+            exit 1
+          fi
 
-    - name: Set up Ruby & CocoaPods/Fastlane
-      working-directory: ./private-repo
-      run: |
-        gem install cocoapods fastlane
-        cd ios && pod install --clean-install --repo-update
-        cd ..
+      - name: Install Codemagic CLI Tools
+        run: |
+          echo "📦 Installing Codemagic CLI tools..."
+          pip install --default-timeout=100 codemagic-cli-tools
+          echo "✅ Codemagic CLI tools installed"
+          google-play --version
 
-    - name: Create Match Keychain & SSH
-      run: |
-        security create-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
-        security unlock-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
-        security set-keychain-settings -lut 21600 ~/Library/Keychains/ios-build.keychain
-        security list-keychains -d user -s ~/Library/Keychains/ios-build.keychain $(security list-keychains -d user | sed s/\"//g)
-        
-        mkdir -p ~/.ssh
-        if [ -n "$MATCH_SSH_KEY_B64" ]; then
-          echo "$MATCH_SSH_KEY_B64" | base64 -d > ~/.ssh/id_rsa
-        else
-          echo "$MATCH_SSH_KEY_REPO" > ~/.ssh/id_rsa
-        fi
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - name: Query Google Play Console for Full Version Info
+        id: query
+        run: |
+          echo "🔍 Querying Google Play Console for full version information..."
+          echo "📋 Package Name: ${{ needs.setup.outputs.android_package_name }}"
+          
+          # Create Python script for version parsing
+          cat > parse_versions.py << 'EOF'
+          import sys
+          import json
+          import re
+          
+          def parse_version(version_string):
+              """Parse version string and return major, minor, patch"""
+              match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_string)
+              if match:
+                  return {
+                      'major': int(match.group(1)),
+                      'minor': int(match.group(2)),
+                      'patch': int(match.group(3)),
+                      'full': f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+                  }
+              return None
+          
+          def compare_versions(v1, v2):
+              """Return True if v1 > v2 (semantic version comparison)"""
+              if not v1 or not v2:
+                  return bool(v1)
+          
+              if v1['major'] != v2['major']:
+                  return v1['major'] > v2['major']
+              if v1['minor'] != v2['minor']:
+                  return v1['minor'] > v2['minor']
+              return v1['patch'] > v2['patch']
+          
+          # Read track data from stdin
+          track_data = sys.stdin.read()
+          
+          # Extract track information
+          tracks = re.findall(r'Track: (\w+)\nReleases:.*?Name: ([^\n]+).*?Version codes:\s*\n\s*- (\d+)', track_data, re.DOTALL)
+          
+          versions = {}
+          highest_version_obj = None
+          highest_version_track = None
+          highest_version_build = 0
+          highest_build_overall = 0
+          
+          print("📊 Found versions in tracks:")
+          print("-" * 50)
+          
+          for track, version_name, build_code in tracks:
+              build_num = int(build_code)
+              parsed_version = parse_version(version_name)
+          
+              if build_num > highest_build_overall:
+                  highest_build_overall = build_num
+          
+              if parsed_version:
+                  versions[track] = {
+                      'version': parsed_version['full'],
+                      'build': build_num,
+                      'raw_name': version_name
+                  }
+          
+                  print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
+          
+                  # Check if this is the highest VERSION (not build)
+                  if compare_versions(parsed_version, highest_version_obj):
+                      highest_version_obj = parsed_version
+                      highest_version_track = track
+                      highest_version_build = build_num
+          
+          print("-" * 50)
+          
+          # Output results
+          if highest_version_obj:
+              print(f"\n✅ Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
+              print(f"📦 Highest BUILD overall: {highest_build_overall}")
+          
+              # Use the highest semantic version, but ensure build number is always higher
+              safe_build = max(highest_build_overall + 10, highest_version_build + 10)
+          
+              print(f"HIGHEST_VERSION={highest_version_obj['full']}")
+              print(f"HIGHEST_BUILD={safe_build}")
+              print(f"VERSION_SOURCE={highest_version_track}")
+              print(f"ALL_VERSIONS={json.dumps(versions)}")
+          else:
+              print("HIGHEST_VERSION=0.0.0")
+              print("HIGHEST_BUILD=0")
+              print("VERSION_SOURCE=none")
+              print("ALL_VERSIONS={}")
+          EOF
+          
+          # Query all tracks and capture output
+          TRACK_OUTPUT=""
+          for TRACK in "internal" "alpha" "beta" "production"; do
+            echo "🔍 Checking track: $TRACK"
+          
+            if OUTPUT=$(google-play tracks get \
+                --package-name "${{ needs.setup.outputs.android_package_name }}" \
+                --track "$TRACK" \
+                --credentials "@file:/tmp/google-play-key.json" 2>&1); then
+              TRACK_OUTPUT="${TRACK_OUTPUT}${OUTPUT}\n"
+              echo "✅ Got track data"
+            fi
+          done
+          
+          # Parse the track data with version-first logic
+          echo -e "$TRACK_OUTPUT" | python3 parse_versions.py > version_results.txt
+          
+          # Read the results
+          HIGHEST_VERSION="0.0.0"
+          HIGHEST_BUILD="0"
+          VERSION_SOURCE="none"
+          ALL_VERSIONS="{}"
+          SUCCESS="false"
+          
+          if [ -f version_results.txt ]; then
+            # Show the analysis output
+            cat version_results.txt
+          
+            # Extract the variables
+            while IFS= read -r line; do
+              if [[ $line == HIGHEST_VERSION=* ]] || [[ $line == HIGHEST_BUILD=* ]] || [[ $line == VERSION_SOURCE=* ]] || [[ $line == ALL_VERSIONS=* ]]; then
+                eval "$line"
+              fi
+            done < version_results.txt
+          
+            if [ "$HIGHEST_VERSION" != "0.0.0" ] && [ "$HIGHEST_BUILD" -gt 0 ]; then
+              SUCCESS="true"
+            fi
+          fi
+          
+          echo ""
+          echo "📋 Final results:"
+          echo "  Version: $HIGHEST_VERSION (from $VERSION_SOURCE track)"
+          echo "  Build: $HIGHEST_BUILD (with safety buffer)"
+          echo "  Success: $SUCCESS"
+          
+          echo "version_name=$HIGHEST_VERSION" >> $GITHUB_OUTPUT
+          echo "build_number=$HIGHEST_BUILD" >> $GITHUB_OUTPUT
+          echo "version_source=$VERSION_SOURCE" >> $GITHUB_OUTPUT
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
-    - name: Setup Match certificates
-      working-directory: ./private-repo/ios
-      run: |
-        echo "🔑 Setting up Match certificates for main app..."
-        fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
-        
-        echo "🔑 Setting up Match certificates for OneSignal extension..."
-        fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+  # iOS UI Tests - SKIPPED IN DEV MODE
+  ios-ui-tests:
+    runs-on: ${{ needs.setup.outputs.ios_runner }}
+    needs: [setup, unit-tests]
+    if: needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_ui_tests == 'true' && needs.setup.outputs.dev_mode == 'false' && (success() || needs.setup.outputs.fail_fast == 'false')
+    outputs:
+      ui_test_status: ${{ steps.ui_test_results.outputs.status }}
+      ui_test_details: ${{ steps.ui_test_results.outputs.details }}
+      ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
+    steps:
+      - name: Start UI Test Timer
+        run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
 
-    - name: Setup App Store Connect API Key
-      working-directory: ./private-repo
-      run: |
-        mkdir -p ios/fastlane
-        if [ -n "$ASC_API_KEY_P8_B64" ]; then
-          KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
-        else
-          KEY="$ASC_API_KEY_P8_REPO"
-        fi
-        
-        # CRITICAL FIX: Escape the key for JSON - replace newlines with \n
-        ESCAPED_KEY=$(echo "$KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
-        
-        # Create API key JSON with properly escaped key
-        cat > ios/fastlane/api_key.json << EOF
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Install Dependencies
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
+
+      # Maestro Setup with proper PATH persistence
+      - name: Setup Maestro
+        run: |
+          echo "📦 Installing Maestro..."
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+          $HOME/.maestro/bin/maestro --version
+
+      - name: WarpBuild Xcode & CocoaPods Compatibility
+        if: needs.setup.outputs.use_warpbuild == 'true'
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Configuring WarpBuild for optimal performance..."
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          xcodebuild -version
+          cd ios
+          rm -rf Pods/ Podfile.lock
+          rm -rf ~/Library/Caches/CocoaPods
+          pod repo update --silent
+          echo "✅ WarpBuild compatibility configuration complete"
+          cd ..
+
+      - name: Simple Xcode Setup
+        if: needs.setup.outputs.use_warpbuild == 'false'
+        run: |
+          echo "🔧 Using available Xcode installation..."
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install CocoaPods Dependencies
+        working-directory: ./private-repo/ios
+        run: |
+          if [[ "${{ needs.setup.outputs.use_warpbuild }}" == "true" ]]; then
+            echo "📦 Installing CocoaPods with WarpBuild optimizations..."
+            pod install --clean-install --repo-update
+          else
+            echo "📦 Installing CocoaPods with standard configuration..."
+            pod install
+          fi
+          echo "✅ CocoaPods installation complete"
+
+      - name: Start Metro Bundler
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Starting Metro bundler..."
+          npx react-native start --reset-cache > metro.log 2>&1 &
+          METRO_PID=$!
+          echo $METRO_PID > metro.pid
+          echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
+          
+          echo "⏱️ Waiting for Metro to be ready..."
+          for i in {1..60}; do
+            if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
+              echo "✅ Metro is ready after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "❌ Metro failed to start after 60 attempts"
+              cat metro.log
+              exit 1
+            fi
+            echo "⏳ Metro not ready yet, attempt $i/60..."
+            sleep 2
+          done
+          
+          echo "⏱️ Additional wait for Metro stability..."
+          sleep 15
+
+      - name: Start iOS Simulator
+        run: |
+          echo "🍎 Creating iOS Simulator..."
+          SIMULATOR_ID=$(xcrun simctl create "Test-iPhone" "iPhone 15" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 14" 2>/dev/null || \
+                        xcrun simctl create "Test-iPhone" "iPhone 13" 2>/dev/null)
+          
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> $GITHUB_ENV
+          echo "Created simulator: $SIMULATOR_ID"
+          
+          xcrun simctl boot $SIMULATOR_ID
+          
+          echo "⏱️ Waiting for simulator to be ready..."
+          for i in {1..30}; do
+            if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
+              echo "✅ Simulator is booted after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Simulator failed to boot after 30 attempts"
+              exit 1
+            fi
+            echo "⏳ Simulator not ready yet, attempt $i/30..."
+            sleep 3
+          done
+          
+          echo "⏱️ Additional wait for simulator stability..."
+          sleep 10
+
+      - name: Build iOS App for Testing
+        working-directory: ./private-repo
+        run: |
+          echo "🔨 Building iOS app for simulator..."
+          cd ios
+          xcodebuild \
+            -workspace ${{ needs.setup.outputs.ios_workspace }} \
+            -scheme ${{ needs.setup.outputs.ios_scheme }} \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath ./build \
+            build
+          echo "✅ iOS app built successfully for testing"
+
+      - name: Install App on Simulator
+        working-directory: ./private-repo
+        run: |
+          echo "📲 Installing app on simulator..."  
+          APP_PATH=$(find ios/build -name "${{ needs.setup.outputs.ios_scheme }}.app" | head -1)  
+          echo "App path: $APP_PATH"  
+          xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"  
+          echo "✅ App installed on simulator"
+
+      - name: Launch App and Wait for Bundle
+        run: |
+          echo "🚀 Launching app..."
+          xcrun simctl launch "$SIMULATOR_ID" ${{ needs.setup.outputs.ios_bundle_id }}
+          echo "⏱️ Waiting for app installation and initial load..."
+          sleep 30
+
+      - name: Run Maestro UI Tests
+        working-directory: ./private-repo
+        run: |
+          echo "🧪 Running Maestro UI tests..."
+          
+          UI_TEST_SUCCESS=true
+          if command -v maestro &> /dev/null; then
+            maestro test .maestro/signup-flow.yml || UI_TEST_SUCCESS=false
+          else
+            UI_TEST_SUCCESS=false
+          fi
+          
+          echo "UI_TEST_SUCCESS=$UI_TEST_SUCCESS" >> $GITHUB_ENV
+
+      - name: Set UI Test Results
+        id: ui_test_results
+        if: always()
+        run: |
+          UI_TEST_END=$(date +%s)
+          UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
+          
+          if [[ "$UI_TEST_SUCCESS" == "true" ]]; then
+            echo "status=✅ iOS UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "details=iOS Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ iOS UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "details=iOS Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cleanup UI Tests
+        if: always()
+        working-directory: ./private-repo
+        run: |
+          if [ -f metro.pid ]; then
+            kill $(cat metro.pid) 2>/dev/null || true
+          fi
+          if [ -n "$SIMULATOR_ID" ]; then
+            xcrun simctl shutdown $SIMULATOR_ID 2>/dev/null || true
+            xcrun simctl delete $SIMULATOR_ID 2>/dev/null || true
+          fi
+
+      - name: Upload UI Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-test-artifacts
+          path: |
+            ./private-repo/metro.log
+            ~/.maestro/tests/
+            ~/.maestro/screenshots/
+          retention-days: 3
+
+      - name: Check UI Test Failure
+        if: env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast == 'true'
+        run: exit 1
+
+  # Android UI Tests - SKIPPED IN DEV MODE
+  android-ui-tests:
+    runs-on: ${{ needs.setup.outputs.android_runner }}
+    timeout-minutes: 40
+    needs: [setup, unit-tests]
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && needs.setup.outputs.dev_mode == 'false' && (success() || needs.setup.outputs.fail_fast == 'false')
+    outputs:
+      ui_test_status: ${{ steps.ui_test_results.outputs.status }}
+      ui_test_details: ${{ steps.ui_test_results.outputs.details }}
+      ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
+    steps:
+      - name: Start UI Test Timer
+        run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      - name: Setup Node.js (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Setup Node.js (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Install Dependencies
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Setup Java (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/setup-java@v4
+        with:
+          java-version: 17
+          distribution: adopt
+
+      - name: Setup Java (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: adopt
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Maestro Setup with proper PATH persistence
+      - name: Setup Maestro
+        run: |
+          echo "📦 Installing Maestro..."
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+          $HOME/.maestro/bin/maestro --version
+
+      - name: Backup & enhance gradle.properties
+        working-directory: ./private-repo
+        run: |
+          cp android/gradle.properties android/gradle.properties.backup || echo "No gradle.properties"
+          echo "" >> android/gradle.properties
+          cat >> android/gradle.properties << EOF
+          org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+          org.gradle.daemon=true
+          org.gradle.parallel=true
+          org.gradle.configureondemand=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.unsafe.configuration-cache=false
+          EOF
+
+      - name: Cache Gradle Wrapper (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/cache@v3
+        with:
+          path: ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle Wrapper (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle Dependencies (buildjet)
+        if: needs.setup.outputs.use_buildjet == 'true'
+        uses: buildjet/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-caches-
+
+      - name: Cache Gradle Dependencies (default)
+        if: needs.setup.outputs.use_buildjet == 'false'
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-caches-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-caches-
+
+      - name: Gradle clean
+        working-directory: ./private-repo/android
+        run: ./gradlew clean
+
+      - name: Start Metro Bundler
+        working-directory: ./private-repo
+        run: |
+          echo "🚀 Starting Metro bundler..."
+          npx react-native start --reset-cache > metro.log 2>&1 &
+          METRO_PID=$!
+          echo $METRO_PID > metro.pid
+          echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
+          
+          echo "⏱️ Waiting for Metro to be ready..."
+          for i in {1..60}; do
+            if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
+              echo "✅ Metro is ready after ${i} attempts"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "❌ Metro failed to start after 60 attempts"
+              cat metro.log
+              exit 1
+            fi
+            echo "⏳ Metro not ready yet, attempt $i/60..."
+            sleep 2
+          done
+          
+          echo "⏱️ Additional wait for Metro stability..."
+          sleep 15
+
+      - name: Build Debug APK
+        working-directory: ./private-repo/android
+        timeout-minutes: 15
+        run: |
+          echo "🔨 Building Android app..."
+          ./gradlew assembleDebug --stacktrace
+          echo "✅ Android APK built successfully"
+          
+          # Verify APK exists
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "❌ APK not found at expected location: $APK_PATH"
+            exit 1
+          fi
+
+      - name: Run Android Maestro UI Tests
+        uses: reactivecircus/android-emulator-runner@v2
+        timeout-minutes: 25
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: Nexus 6
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: ./private-repo
+          script: |
+            TEST_FILE="signup-flow.yml"
+            echo "📱 Installing APK on emulator..."
+            adb install android/app/build/outputs/apk/debug/app-debug.apk
+            echo "🚀 Launching app..."
+            adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity
+            sleep 3
+            echo "🧪 Running Maestro UI tests"
+            maestro test ".maestro/$TEST_FILE"
+            echo "✅ Android UI tests completed successfully"
+
+      - name: Set UI Test Results
+        id: ui_test_results
+        if: always()
+        run: |
+          UI_TEST_END=$(date +%s)
+          UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "status=✅ Android UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "details=Android Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ Android UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "details=Android Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cleanup Android UI Tests
+        if: always()
+        working-directory: ./private-repo
+        run: |
+          if [ -f metro.pid ]; then
+            kill $(cat metro.pid) 2>/dev/null || true
+          fi
+
+      - name: Upload UI Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-test-artifacts
+          path: |
+            ./private-repo/metro.log
+            ~/.maestro/tests/
+            ~/.maestro/screenshots/
+          retention-days: 3
+
+      - name: Check UI Test Failure
+        if: failure() && needs.setup.outputs.fail_fast == 'true'
+        run: exit 1
+
+  # iOS Build & Deploy - FIXED VERSION LOGIC WITH DEBUGGING
+  ios-build:
+    runs-on: ${{ needs.setup.outputs.ios_runner }}
+    needs: [setup, ios-ui-tests, app-store-query]
+    if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
+    env:
+      IOS_DIR: ${{ github.workspace }}/private-repo/ios
+      ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/Archive.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/private-repo/ios/build/export
+      MATCH_SSH_KEY_B64: ${{ github.event.client_payload.secrets.MATCH_SSH_KEY_B64 || '' }}
+      MATCH_SSH_KEY_REPO: ${{ secrets.MATCH_SSH_KEY || '' }}
+      MATCH_GIT_URL: ${{ github.event.client_payload.secrets.MATCH_GIT_URL || secrets.MATCH_GIT_URL }}
+      MATCH_PASSWORD: ${{ github.event.client_payload.secrets.MATCH_PASSWORD || secrets.MATCH_PASSWORD }}
+      ASC_API_KEY_ID: ${{ github.event.client_payload.secrets.ASC_API_KEY_ID || secrets.ASC_API_KEY_ID }}
+      ASC_API_KEY_P8_B64: ${{ github.event.client_payload.secrets.ASC_API_KEY_P8_B64 || '' }}
+      ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
+      ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
+    steps:
+      # 🔧 DEV MODE WARNING
+      - name: Development Mode Warning
+        if: needs.setup.outputs.dev_mode == 'true'
+        run: |
+          echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
+          echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
+          echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
+          echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
+
+      - name: Start Build Timer
+        run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Check Prerequisites for Store Distribution
+        if: needs.setup.outputs.track == 'production'
+        run: |
+          UI_TESTS_PASSED="${{ needs.ios-ui-tests.outputs.passed }}"
+          if [[ "$UI_TESTS_PASSED" != "true" ]]; then exit 1; fi
+
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: './private-repo/yarn.lock'
+
+      - name: Install Dependencies
+        working-directory: ./private-repo
+        run: yarn install --frozen-lockfile
+
+      - name: Read and determine next iOS version (FIXED WITH DEBUGGING)
+        working-directory: ./private-repo
+        run: |
+          PBX="ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj"
+          CURRENT_VERSION=$(grep -o "MARKETING_VERSION = [^;]*" $PBX | head -1 | sed 's/MARKETING_VERSION = //;s/;//')
+          CURRENT_BUILD=$(grep -o "CURRENT_PROJECT_VERSION = [^;]*" $PBX | head -1 | sed 's/CURRENT_PROJECT_VERSION = //;s/;//')
+          
+          # Parse current version components
+          IFS='.' read -ra V <<< "$CURRENT_VERSION"
+          MAJOR=${V[0]}
+          MINOR=${V[1]}
+          PATCH=${V[2]}
+          
+          # Version Strategy Logic
+          VERSION_STRATEGY="${{ needs.setup.outputs.version_strategy }}"
+          CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
+          CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
+          
+          echo "📋 iOS Version Management:"
+          echo "  Current Version: $CURRENT_VERSION (build $CURRENT_BUILD)"
+          echo "  Version Strategy: $VERSION_STRATEGY"
+          
+          # Determine version name based on strategy
+          case "$VERSION_STRATEGY" in
+            "major")
+              NEXT_VERSION="$((MAJOR + 1)).0.0"
+              echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "minor")
+              NEXT_VERSION="$MAJOR.$((MINOR + 1)).0"
+              echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "patch")
+              NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+            "custom")
+              if [ -n "$CUSTOM_VERSION" ]; then
+                NEXT_VERSION="$CUSTOM_VERSION"
+                echo "  Custom version: $NEXT_VERSION"
+              else
+                NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+                echo "  No custom version provided, using patch increment: $NEXT_VERSION"
+              fi
+              ;;
+            "build_only")
+              NEXT_VERSION="$CURRENT_VERSION"
+              echo "  Build only: keeping version $NEXT_VERSION"
+              ;;
+            *)  # "auto" or default
+              NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION"
+              ;;
+          esac
+          
+          # Determine build number - ENHANCED DEBUGGING
+          echo ""
+          echo "🔍 DEBUG: App Store Query Results:"
+          echo "  needs.app-store-query.outputs.latest_build_number = '${{ needs.app-store-query.outputs.latest_build_number }}'"
+          echo "  needs.app-store-query.outputs.query_success = '${{ needs.app-store-query.outputs.query_success }}'"
+          
+          if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
+            NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
+            echo "  Custom build number: $NEXT_BUILD"
+          else
+            # Store-first approach for build number
+            LATEST_APP_STORE_BUILD="${{ needs.app-store-query.outputs.latest_build_number }}"
+            APP_STORE_SUCCESS="${{ needs.app-store-query.outputs.query_success }}"
+          
+            echo ""
+            echo "🔍 DEBUG: Local Variables:"
+            echo "  LATEST_APP_STORE_BUILD = '$LATEST_APP_STORE_BUILD'"
+            echo "  APP_STORE_SUCCESS = '$APP_STORE_SUCCESS'"
+            echo "  CURRENT_BUILD = '$CURRENT_BUILD'"
+          
+            # FIX: Check for string "true" and non-empty/non-zero build number
+            if [ "$APP_STORE_SUCCESS" = "true" ] && [ -n "$LATEST_APP_STORE_BUILD" ] && [ "$LATEST_APP_STORE_BUILD" != "0" ]; then
+              NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
+              STRATEGY="App Store Connect + 1 (store-first)"
+              echo "  ✅ Using store-first approach"
+              echo "  Build number: $LATEST_APP_STORE_BUILD → $NEXT_BUILD ($STRATEGY)"
+            else
+              # Fallback logic with better handling
+              if [ -n "$CURRENT_BUILD" ] && [ "$CURRENT_BUILD" -ge 100 ]; then
+                FALLBACK_BUILD=$((CURRENT_BUILD + 1))
+              else
+                FALLBACK_BUILD=101  # Start from 101 to avoid conflict with existing 100
+              fi
+              NEXT_BUILD="$FALLBACK_BUILD"
+              STRATEGY="Fallback (store query failed or returned invalid data)"
+              echo "  ⚠️ Using fallback approach"
+              echo "  Build number: $NEXT_BUILD ($STRATEGY)"
+              echo "  Reason: APP_STORE_SUCCESS='$APP_STORE_SUCCESS', LATEST_APP_STORE_BUILD='$LATEST_APP_STORE_BUILD'"
+            fi
+          fi
+          
+          echo ""
+          echo "✅ Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
+          echo "📝 Strategy used: $STRATEGY"
+          
+          echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
+          echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
+
+      - name: Update iOS version for build
+        working-directory: ./private-repo
+        run: |
+          PBX="ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj"
+          sed -i.bak "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = ${{ env.NEXT_VERSION_NAME }}/" $PBX
+          sed -i.bak "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = ${{ env.NEXT_VERSION_CODE }}/" $PBX
+
+      - name: Set up Ruby & CocoaPods/Fastlane
+        working-directory: ./private-repo
+        run: |
+          gem install cocoapods fastlane
+          cd ios && pod install --clean-install --repo-update
+          cd ..
+
+      - name: Create Match Keychain & SSH
+        run: |
+          security create-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security unlock-keychain -p "12345678" ~/Library/Keychains/ios-build.keychain
+          security set-keychain-settings -lut 21600 ~/Library/Keychains/ios-build.keychain
+          security list-keychains -d user -s ~/Library/Keychains/ios-build.keychain $(security list-keychains -d user | sed s/\"//g)
+          
+          mkdir -p ~/.ssh
+          if [ -n "$MATCH_SSH_KEY_B64" ]; then
+            echo "$MATCH_SSH_KEY_B64" | base64 -d > ~/.ssh/id_rsa
+          else
+            echo "$MATCH_SSH_KEY_REPO" > ~/.ssh/id_rsa
+          fi
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Setup Match certificates
+        working-directory: ./private-repo/ios
+        run: |
+          echo "🔑 Setting up Match certificates for main app..."
+          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+          
+          echo "🔑 Setting up Match certificates for OneSignal extension..."
+          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+
+      - name: Setup App Store Connect API Key
+        working-directory: ./private-repo
+        run: |
+          mkdir -p ios/fastlane
+          if [ -n "$ASC_API_KEY_P8_B64" ]; then
+            KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
+          else
+            KEY="$ASC_API_KEY_P8_REPO"
+          fi
+          
+          # CRITICAL FIX: Escape the key for JSON - replace newlines with \n
+          ESCAPED_KEY=$(echo "$KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+          
+          # Create API key JSON with properly escaped key
+          cat > ios/fastlane/api_key.json << EOF
   {
     "key_id": "$ASC_API_KEY_ID",
     "issuer_id": "$ASC_ISSUER_ID",
@@ -1231,80 +1231,80 @@ ios-build:
   }
   EOF
 
-- name: Create exportOptions.plist
-  working-directory: ./private-repo
-  run: |
-    cat > ios/exportOptions.plist << EOF
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-        <key>method</key>
-        <string>app-store</string>
-        <key>teamID</key>
-        <string>${{ needs.setup.outputs.apple_team_id }}</string>
-        <key>uploadBitcode</key>
-        <false/>
-        <key>uploadSymbols</key>
-        <true/>
-        <key>compileBitcode</key>
-        <false/>
-        <key>manageAppVersionAndBuildNumber</key>
-        <true/>
-        <key>signingStyle</key>
-        <string>manual</string>
-        <key>provisioningProfiles</key>
-        <dict>
-            <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
-            <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}</string>
-            <key>${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</key>
-            <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</string>
-        </dict>
-    </dict>
-    </plist>
-    EOF
+  - name: Create exportOptions.plist
+    working-directory: ./private-repo
+    run: |
+      cat > ios/exportOptions.plist << EOF
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+          <key>method</key>
+          <string>app-store</string>
+          <key>teamID</key>
+          <string>${{ needs.setup.outputs.apple_team_id }}</string>
+          <key>uploadBitcode</key>
+          <false/>
+          <key>uploadSymbols</key>
+          <true/>
+          <key>compileBitcode</key>
+          <false/>
+          <key>manageAppVersionAndBuildNumber</key>
+          <true/>
+          <key>signingStyle</key>
+          <string>manual</string>
+          <key>provisioningProfiles</key>
+          <dict>
+              <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
+              <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}</string>
+              <key>${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</key>
+              <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</string>
+          </dict>
+      </dict>
+      </plist>
+      EOF
 
-- name: Build & Archive
-  working-directory: ./private-repo
-  run: |
-    xcodebuild clean archive \
-      -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
-      -scheme ${{ needs.setup.outputs.ios_scheme }} \
-      -configuration Release \
-      -sdk iphoneos \
-      -archivePath "$ARCHIVE_PATH" \
-      CODE_SIGN_STYLE=Manual \
-      DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
-      ENABLE_BITCODE=NO
-    xcodebuild -exportArchive \
-      -archivePath "$ARCHIVE_PATH" \
-      -exportOptionsPlist ios/exportOptions.plist \
-      -exportPath "$EXPORT_PATH"
+  - name: Build & Archive
+    working-directory: ./private-repo
+    run: |
+      xcodebuild clean archive \
+        -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
+        -scheme ${{ needs.setup.outputs.ios_scheme }} \
+        -configuration Release \
+        -sdk iphoneos \
+        -archivePath "$ARCHIVE_PATH" \
+        CODE_SIGN_STYLE=Manual \
+        DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
+        ENABLE_BITCODE=NO
+      xcodebuild -exportArchive \
+        -archivePath "$ARCHIVE_PATH" \
+        -exportOptionsPlist ios/exportOptions.plist \
+        -exportPath "$EXPORT_PATH"
 
-- name: Upload to TestFlight
-  working-directory: ./private-repo/ios
-  run: |
-    echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-    export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
-    echo "📱 Uploading IPA: $IPA_PATH"
-    
-    if [ ! -f "$IPA_PATH" ]; then
-      echo "❌ IPA not found at: $IPA_PATH"
-      echo "Available files:"
-      find build/export -name "*.ipa" || ls -la build/export/
-      exit 1
-    fi
-    
-    fastlane ios beta
+  - name: Upload to TestFlight
+    working-directory: ./private-repo/ios
+    run: |
+      echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+      export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
+      echo "📱 Uploading IPA: $IPA_PATH"
+      
+      if [ ! -f "$IPA_PATH" ]; then
+        echo "❌ IPA not found at: $IPA_PATH"
+        echo "Available files:"
+        find build/export -name "*.ipa" || ls -la build/export/
+        exit 1
+      fi
+      
+      fastlane ios beta
 
-- name: Commit iOS version bump
-  working-directory: ./private-repo
-  run: |
-    git config --local user.email "action@github.com"
-    git config --local user.name "GitHub Action"
-    git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
-    git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
-    git push
+  - name: Commit iOS version bump
+    working-directory: ./private-repo
+    run: |
+      git config --local user.email "action@github.com"
+      git config --local user.name "GitHub Action"
+      git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
+      git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
+      git push
 
 # Android Build & Deploy - TRUE STORE-FIRST VERSION MANAGEMENT
 android-build:

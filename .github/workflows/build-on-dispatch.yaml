@@ -1265,7 +1265,7 @@ jobs:
               <key>compileBitcode</key>
               <false/>
               <key>manageAppVersionAndBuildNumber</key>
-              <true/>
+              <false/>  <!-- CHANGE THIS FROM true TO false -->
               <key>signingStyle</key>
               <string>manual</string>
               <key>provisioningProfiles</key>

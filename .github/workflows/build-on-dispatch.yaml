@@ -1207,13 +1207,19 @@ jobs:
           echo "🔑 Setting up Match certificates for OneSignal extension..."
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
 
-      - name: Setup App Store Connect API Key
-        working-directory: ./private-repo
+      - name: Setup App Store Connect API Key (Fixed JSON Escaping)
         run: |
+          echo "🔑 Setting up App Store Connect API key with proper JSON escaping..."
+          
+          # Create proper directory structure
           mkdir -p ios/fastlane
+          
+          # Get the key (base64 or direct)
           if [ -n "$ASC_API_KEY_P8_B64" ]; then
+            echo "🔑 Using base64 encoded key"
             KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
           else
+            echo "🔑 Using direct key"
             KEY="$ASC_API_KEY_P8_REPO"
           fi
           
@@ -1222,89 +1228,94 @@ jobs:
           
           # Create API key JSON with properly escaped key
           cat > ios/fastlane/api_key.json << EOF
-  {
-    "key_id": "$ASC_API_KEY_ID",
-    "issuer_id": "$ASC_ISSUER_ID",
-    "key": "$ESCAPED_KEY",
-    "duration": 1200,
-    "in_house": false
-  }
-  EOF
+          {
+            "key_id": "$ASC_API_KEY_ID",
+            "issuer_id": "$ASC_ISSUER_ID",
+            "key": "$ESCAPED_KEY",
+            "duration": 1200,
+            "in_house": false
+          }
+          EOF
+          
+          echo "✅ API key file created with properly escaped multiline key"
+          
+          # Don't echo the actual JSON to avoid leaking secrets in logs
+          echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
-  - name: Create exportOptions.plist
-    working-directory: ./private-repo
-    run: |
-      cat > ios/exportOptions.plist << EOF
-      <?xml version="1.0" encoding="UTF-8"?>
-      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-      <plist version="1.0">
-      <dict>
-          <key>method</key>
-          <string>app-store</string>
-          <key>teamID</key>
-          <string>${{ needs.setup.outputs.apple_team_id }}</string>
-          <key>uploadBitcode</key>
-          <false/>
-          <key>uploadSymbols</key>
-          <true/>
-          <key>compileBitcode</key>
-          <false/>
-          <key>manageAppVersionAndBuildNumber</key>
-          <true/>
-          <key>signingStyle</key>
-          <string>manual</string>
-          <key>provisioningProfiles</key>
+      - name: Create exportOptions.plist
+        working-directory: ./private-repo
+        run: |
+          cat > ios/exportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
           <dict>
-              <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
-              <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}</string>
-              <key>${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</key>
-              <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</string>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>${{ needs.setup.outputs.apple_team_id }}</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>manageAppVersionAndBuildNumber</key>
+              <true/>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
+                  <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}</string>
+                  <key>${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</key>
+                  <string>match AppStore ${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt</string>
+              </dict>
           </dict>
-      </dict>
-      </plist>
-      EOF
+          </plist>
+          EOF
 
-  - name: Build & Archive
-    working-directory: ./private-repo
-    run: |
-      xcodebuild clean archive \
-        -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
-        -scheme ${{ needs.setup.outputs.ios_scheme }} \
-        -configuration Release \
-        -sdk iphoneos \
-        -archivePath "$ARCHIVE_PATH" \
-        CODE_SIGN_STYLE=Manual \
-        DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
-        ENABLE_BITCODE=NO
-      xcodebuild -exportArchive \
-        -archivePath "$ARCHIVE_PATH" \
-        -exportOptionsPlist ios/exportOptions.plist \
-        -exportPath "$EXPORT_PATH"
+      - name: Build & Archive
+        working-directory: ./private-repo
+        run: |
+          xcodebuild clean archive \
+            -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
+            -scheme ${{ needs.setup.outputs.ios_scheme }} \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
+            ENABLE_BITCODE=NO
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist ios/exportOptions.plist \
+            -exportPath "$EXPORT_PATH"
 
-  - name: Upload to TestFlight
-    working-directory: ./private-repo/ios
-    run: |
-      echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-      export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
-      echo "📱 Uploading IPA: $IPA_PATH"
-      
-      if [ ! -f "$IPA_PATH" ]; then
-        echo "❌ IPA not found at: $IPA_PATH"
-        echo "Available files:"
-        find build/export -name "*.ipa" || ls -la build/export/
-        exit 1
-      fi
-      
-      fastlane ios beta
+      - name: Upload to TestFlight
+        working-directory: ./private-repo/ios
+        run: |
+          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+          export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
+          echo "📱 Uploading IPA: $IPA_PATH"
+          
+          if [ ! -f "$IPA_PATH" ]; then
+            echo "❌ IPA not found at: $IPA_PATH"
+            echo "Available files:"
+            find build/export -name "*.ipa" || ls -la build/export/
+            exit 1
+          fi
+          
+          fastlane ios beta
 
-  - name: Commit iOS version bump
-    working-directory: ./private-repo
-    run: |
-      git config --local user.email "action@github.com"
-      git config --local user.name "GitHub Action"
-      git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
-      git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
-      git push
+      - name: Commit iOS version bump
+        working-directory: ./private-repo
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
+          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
+          git push
 
 # Android Build & Deploy - TRUE STORE-FIRST VERSION MANAGEMENT
 android-build:

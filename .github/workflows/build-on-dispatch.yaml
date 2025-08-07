@@ -367,7 +367,6 @@ jobs:
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
   # Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
-  # Google Play Console Query - ENHANCED WITH VERSION NAME RETRIEVAL
   google-play-query:
     runs-on: ubuntu-latest
     needs: setup
@@ -1019,6 +1018,10 @@ jobs:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
     needs: [setup, ios-ui-tests, app-store-query]
     if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
+    outputs:
+      version_name: ${{ env.NEXT_VERSION_NAME }}
+      version_code: ${{ env.NEXT_VERSION_CODE }}
+      build_success: ${{ steps.ios-build-status.outputs.success }}
     env:
       IOS_DIR: ${{ github.workspace }}/private-repo/ios
       ARCHIVE_PATH: ${{ github.workspace }}/private-repo/ios/build/Archive.xcarchive
@@ -1312,14 +1315,15 @@ jobs:
           
           fastlane ios beta
 
-      - name: Commit iOS version bump
-        working-directory: ./private-repo
+      - name: Set iOS Build Status
+        id: ios-build-status
+        if: always()
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add ios/${{ needs.setup.outputs.ios_scheme }}.xcodeproj/project.pbxproj
-          git commit -m "feat(ios): bump to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
-          git push
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
 
   # Android Build & Deploy - TRUE STORE-FIRST VERSION MANAGEMENT
   android-build:
@@ -1327,6 +1331,10 @@ jobs:
     timeout-minutes: 30
     needs: [setup, android-ui-tests, google-play-query]
     if: always() && needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.android-ui-tests.outputs.ui_tests_passed == 'true')
+    outputs:
+      version_name: ${{ env.NEXT_VERSION_NAME }}
+      version_code: ${{ env.NEXT_VERSION_CODE }}
+      build_success: ${{ steps.android-build-status.outputs.success }}
     env:
       ANDROID_DIR: ${{ github.workspace }}/private-repo/android
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
@@ -1576,44 +1584,221 @@ jobs:
           track: ${{ needs.setup.outputs.track }}
           status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
 
-      - name: Set Google Play Status
+      - name: Set Android Build Status
+        id: android-build-status
+        if: always()
         run: |
           echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-          echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "GOOGLE_PLAY_STATUS=❌ Google Play upload failed" >> $GITHUB_ENV
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Commit version bump to private repo
-        working-directory: ./private-repo
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add android/app/build.gradle
-          git commit -m "feat(android): bump version to ${{ env.NEXT_VERSION_NAME }} (build ${{ env.NEXT_VERSION_CODE }}) LP-23 [skip ci]" || exit 0
-          git push
-
-  # Summary
-  summary:
+  # Combined commit and notify job - replaces individual commits and adds Slack back
+  commit-and-notify:
     runs-on: ubuntu-latest
     needs: [setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, app-store-query, ios-build, android-build]
     if: always()
+    env:
+      # Set SLACK_WEBHOOK_URL from repository dispatch payload or secrets
+      SLACK_WEBHOOK_URL: ${{ github.event.client_payload.secrets.SLACK_WEBHOOK_URL || secrets.SLACK_WEBHOOK_URL || '' }}
     steps:
+      # CRITICAL: Ensure public repo action is available
+      - name: Checkout Public Repository (for actions)
+        uses: actions/checkout@v4
+        # This checks out the public repo (where this workflow runs) to ensure actions are available
+
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.target_repo }}
+          ref: ${{ needs.setup.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./private-repo
+
+      - name: Calculate Build Duration
+        id: duration
+        run: |
+          # Calculate workflow duration from start to now
+          WORKFLOW_START_TIME="${{ github.event.head_commit.timestamp || github.event.repository.updated_at }}"
+          CURRENT_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          # Convert to epoch for calculation
+          if command -v python3 &> /dev/null; then
+            START_EPOCH=$(python3 -c "from datetime import datetime; print(int(datetime.fromisoformat('${WORKFLOW_START_TIME}'.replace('Z', '+00:00')).timestamp()))")
+            END_EPOCH=$(python3 -c "from datetime import datetime; print(int(datetime.fromisoformat('${CURRENT_TIME}'.replace('Z', '+00:00')).timestamp()))")
+            DURATION=$((END_EPOCH - START_EPOCH))
+          else
+            # Fallback: estimate based on typical build times
+            if [[ "${{ needs.setup.outputs.build_ios }}" == "true" && "${{ needs.setup.outputs.build_android }}" == "true" ]]; then
+              DURATION=1800  # ~30 min for both platforms
+            elif [[ "${{ needs.setup.outputs.build_ios }}" == "true" ]]; then
+              DURATION=1200  # ~20 min for iOS only
+            else
+              DURATION=600   # ~10 min for Android only
+            fi
+          fi
+          
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "duration_formatted=$(printf '%02d:%02d' $((DURATION/60)) $((DURATION%60)))" >> $GITHUB_OUTPUT
+
+      - name: Collect Build Results
+        id: results
+        run: |
+          # Collect all job results for comprehensive summary
+          echo "setup_result=${{ needs.setup.result }}" >> $GITHUB_OUTPUT
+          echo "unit_tests_result=${{ needs.unit-tests.result }}" >> $GITHUB_OUTPUT
+          echo "ios_ui_tests_result=${{ needs.ios-ui-tests.result }}" >> $GITHUB_OUTPUT
+          echo "android_ui_tests_result=${{ needs.android-ui-tests.result }}" >> $GITHUB_OUTPUT
+          echo "google_play_query_result=${{ needs.google-play-query.result }}" >> $GITHUB_OUTPUT
+          echo "app_store_query_result=${{ needs.app-store-query.result }}" >> $GITHUB_OUTPUT
+          echo "ios_build_result=${{ needs.ios-build.result }}" >> $GITHUB_OUTPUT
+          echo "android_build_result=${{ needs.android-build.result }}" >> $GITHUB_OUTPUT
+          
+          # Get version and build numbers
+          echo "ios_version=${{ needs.ios-build.outputs.version_name || 'N/A' }}" >> $GITHUB_OUTPUT
+          echo "ios_build=${{ needs.ios-build.outputs.version_code || 'N/A' }}" >> $GITHUB_OUTPUT
+          echo "android_version=${{ needs.android-build.outputs.version_name || 'N/A' }}" >> $GITHUB_OUTPUT
+          echo "android_build=${{ needs.android-build.outputs.version_code || 'N/A' }}" >> $GITHUB_OUTPUT
+          
+          # Calculate overall success
+          OVERALL_SUCCESS="true"
+          if [[ "${{ needs.setup.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.run_unit_tests }}" == "true" && "${{ needs.unit-tests.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_ios }}" == "true" && "${{ needs.setup.outputs.run_ui_tests }}" == "true" && "${{ needs.ios-ui-tests.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.setup.outputs.run_ui_tests }}" == "true" && "${{ needs.android-ui-tests.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_ios }}" == "true" && "${{ needs.ios-build.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          if [[ "${{ needs.setup.outputs.build_android }}" == "true" && "${{ needs.android-build.result }}" == "failure" ]]; then OVERALL_SUCCESS="false"; fi
+          
+          echo "overall_success=$OVERALL_SUCCESS" >> $GITHUB_OUTPUT
+
+      - name: Commit Version Bumps
+        if: needs.ios-build.result == 'success' || needs.android-build.result == 'success'
+        working-directory: ./private-repo
+        run: |
+          echo "📝 Committing version bumps..."
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Pull latest to ensure we're up to date
+          git pull origin ${{ needs.setup.outputs.target_ref }}
+          
+          # Stage changes based on what succeeded
+          COMMIT_MSG="chore: bump versions ["
+          CHANGES_MADE=false
+          
+          if [[ "${{ needs.ios-build.result }}" == "success" ]]; then
+            # Try to add iOS project file changes
+            if git add ios/*.xcodeproj/project.pbxproj 2>/dev/null; then
+              COMMIT_MSG="${COMMIT_MSG}iOS v${{ needs.ios-build.outputs.version_name }} (build ${{ needs.ios-build.outputs.version_code }}) "
+              CHANGES_MADE=true
+            fi
+          fi
+          
+          if [[ "${{ needs.android-build.result }}" == "success" ]]; then
+            # Try to add Android gradle file changes
+            if git add android/app/build.gradle 2>/dev/null; then
+              COMMIT_MSG="${COMMIT_MSG}Android v${{ needs.android-build.outputs.version_name }} (build ${{ needs.android-build.outputs.version_code }}) "
+              CHANGES_MADE=true
+            fi
+          fi
+          
+          COMMIT_MSG="${COMMIT_MSG}] 🚀 LP-23 [skip ci]"
+          
+          # Commit and push if there are changes
+          if [ "$CHANGES_MADE" = true ] && ! git diff --staged --quiet; then
+            git commit -m "$COMMIT_MSG"
+            git push
+            echo "✅ Version bumps committed and pushed"
+          else
+            echo "ℹ️ No changes to commit"
+          fi
+
+      - name: Debug Action Availability
+        run: |
+          echo "🔍 Checking action availability..."
+          echo "Current directory: $(pwd)"
+          echo "Contents:"
+          ls -la
+          echo ""
+          echo "Checking for .github directory:"
+          ls -la .github/ || echo "No .github directory found"
+          echo ""
+          echo "Checking for actions directory:"
+          ls -la .github/actions/ || echo "No .github/actions directory found"
+          echo ""
+          echo "Checking for slack-notify action:"
+          ls -la .github/actions/slack-notify/ || echo "No slack-notify action found"
+
+      - name: Send Slack Notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook_url: ${{ env.SLACK_WEBHOOK_URL }}
+          status: ${{ steps.results.outputs.overall_success == 'true' && 'success' || 'failure' }}
+          duration: ${{ steps.duration.outputs.duration }}
+          duration_formatted: ${{ steps.duration.outputs.duration_formatted }}
+          platform: ${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && 'both' || needs.setup.outputs.build_ios == 'true' && 'ios' || 'android' }}
+          dev_mode: ${{ needs.setup.outputs.dev_mode }}
+          target_repo: ${{ needs.setup.outputs.target_repo }}
+          trigger_actor: ${{ github.event.client_payload.trigger_actor || github.actor }}
+          # Test results
+          unit_tests_result: ${{ needs.unit-tests.result }}
+          ios_ui_tests_result: ${{ needs.ios-ui-tests.result }}
+          android_ui_tests_result: ${{ needs.android-ui-tests.result }}
+          # Build results with version info
+          ios_build_result: ${{ needs.ios-build.result }}
+          android_build_result: ${{ needs.android-build.result }}
+          ios_version: ${{ steps.results.outputs.ios_version }}
+          ios_build_number: ${{ steps.results.outputs.ios_build }}
+          android_version: ${{ steps.results.outputs.android_version }}
+          android_build_number: ${{ steps.results.outputs.android_build }}
+          # Store query results
+          google_play_query_result: ${{ needs.google-play-query.result }}
+          google_play_build_number: ${{ needs.google-play-query.outputs.latest_build_number }}
+          # Additional info
+          track: ${{ needs.setup.outputs.track }}
+          branch: ${{ needs.setup.outputs.target_ref }}
+
       - name: LittlePipes Build Summary
         run: |
           echo "🚀 LittlePipes Build Complete!"
           echo "Target: ${{ needs.setup.outputs.target_repo }}"
-          echo "Ref: ${{ needs.setup.outputs.target_ref }}"
-          echo "Actor: ${{ needs.setup.outputs.trigger_actor }}"
-          echo "Platform: ${{ needs.setup.outputs.build_ios }} iOS, ${{ needs.setup.outputs.build_android }} Android"
-          echo "Version Strategy: ${{ needs.setup.outputs.version_strategy }}"
+          echo "Branch: ${{ needs.setup.outputs.target_ref }}"
+          echo "Platform: ${{ needs.setup.outputs.build_ios == 'true' && 'iOS' || '' }}${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && ' + ' || '' }}${{ needs.setup.outputs.build_android == 'true' && 'Android' || '' }}"
+          echo "Duration: ${{ steps.duration.outputs.duration_formatted }}"
+          echo "Overall Status: ${{ steps.results.outputs.overall_success == 'true' && '✅ SUCCESS' || '❌ FAILURE' }}"
           
           if [ "${{ needs.setup.outputs.dev_mode }}" = "true" ]; then
             echo "🔧 DEV MODE: Tests were skipped for pipeline development"
           else
-            echo "UI Tests: iOS→${{ needs.ios-ui-tests.outputs.ui_tests_passed }}, Android→${{ needs.android-ui-tests.outputs.ui_tests_passed }}"
+            echo "Tests: Unit→${{ needs.unit-tests.result }}, iOS UI→${{ needs.ios-ui-tests.result }}, Android UI→${{ needs.android-ui-tests.result }}"
           fi
           
           echo "Store Queries:"
           echo "  Google Play: ${{ needs.google-play-query.outputs.query_success }} (version ${{ needs.google-play-query.outputs.latest_version_name }}, build ${{ needs.google-play-query.outputs.latest_build_number }})"
           echo "  App Store: ${{ needs.app-store-query.outputs.query_success }} (build ${{ needs.app-store-query.outputs.latest_build_number }})"
-          echo "Builds: iOS→${{ needs.ios-build.result }}, Android→${{ needs.android-build.result }}"
+          
+          echo "Builds:"
+          if [[ "${{ needs.ios-build.result }}" == "success" ]]; then
+            echo "  iOS: ✅ v${{ steps.results.outputs.ios_version }} (build ${{ steps.results.outputs.ios_build }})"
+          else
+            echo "  iOS: ${{ needs.ios-build.result }}"
+          fi
+          if [[ "${{ needs.android-build.result }}" == "success" ]]; then
+            echo "  Android: ✅ v${{ steps.results.outputs.android_version }} (build ${{ steps.results.outputs.android_build }})"
+          else
+            echo "  Android: ${{ needs.android-build.result }}"
+          fi
+          
+          if [ "${{ env.SLACK_WEBHOOK_URL }}" != "" ]; then
+            echo "📱 Slack notification sent"
+          else
+            echo "⚠️ Slack notification skipped (no webhook URL)"
+          fi
+          
           echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"
-        

@@ -1072,6 +1072,21 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
+      - name: Fix iOS Deployment Target
+        working-directory: ./private-repo
+        run: |
+          echo "🔧 Updating iOS deployment target for Xcode 16 compatibility..."
+
+          # Update Podfile minimum deployment target
+          if [ -f "ios/Podfile" ]; then
+            sed -i.bak "s/platform :ios, '11.0'/platform :ios, '12.0'/g" ios/Podfile
+            sed -i.bak "s/platform :ios, \"11.0\"/platform :ios, \"12.0\"/g" ios/Podfile
+          fi
+
+          # Update main project deployment target
+          sed -i.bak 's/IPHONEOS_DEPLOYMENT_TARGET = 11.0/IPHONEOS_DEPLOYMENT_TARGET = 12.0/g' ios/*.xcodeproj/project.pbxproj
+          sed -i.bak 's/IPHONEOS_DEPLOYMENT_TARGET = "11.0"/IPHONEOS_DEPLOYMENT_TARGET = "12.0"/g' ios/*.xcodeproj/project.pbxproj
+
       - name: Read and determine next iOS version (FIXED WITH DEBUGGING)
         working-directory: ./private-repo
         run: |

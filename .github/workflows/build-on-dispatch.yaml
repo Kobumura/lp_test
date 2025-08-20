@@ -1016,7 +1016,7 @@ jobs:
   # iOS Build & Deploy - FIXED VERSION LOGIC WITH DEBUGGING
   ios-build:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
-    needs: [setup, ios-ui-tests, app-store-query]
+    needs: [ setup, ios-ui-tests, app-store-query ]
     if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
     outputs:
       version_name: ${{ env.NEXT_VERSION_NAME }}
@@ -1072,20 +1072,22 @@ jobs:
         working-directory: ./private-repo
         run: yarn install --frozen-lockfile
 
-      - name: Fix iOS Deployment Target
+      - name: Fix iOS Deployment Target for Xcode 16
         working-directory: ./private-repo
         run: |
           echo "🔧 Updating iOS deployment target for Xcode 16 compatibility..."
-
+          
           # Update Podfile minimum deployment target
           if [ -f "ios/Podfile" ]; then
             sed -i.bak "s/platform :ios, '11.0'/platform :ios, '12.0'/g" ios/Podfile
             sed -i.bak "s/platform :ios, \"11.0\"/platform :ios, \"12.0\"/g" ios/Podfile
+            echo "✅ Updated Podfile deployment target"
           fi
-
+          
           # Update main project deployment target
           sed -i.bak 's/IPHONEOS_DEPLOYMENT_TARGET = 11.0/IPHONEOS_DEPLOYMENT_TARGET = 12.0/g' ios/*.xcodeproj/project.pbxproj
           sed -i.bak 's/IPHONEOS_DEPLOYMENT_TARGET = "11.0"/IPHONEOS_DEPLOYMENT_TARGET = "12.0"/g' ios/*.xcodeproj/project.pbxproj
+          echo "✅ Updated project deployment target"
 
       - name: Read and determine next iOS version (FIXED WITH DEBUGGING)
         working-directory: ./private-repo
@@ -1185,7 +1187,7 @@ jobs:
           
           echo ""
           echo "✅ Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
-          echo "📝 Strategy used: $STRATEGY"
+          echo "🔍 Strategy used: $STRATEGY"
           
           echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
@@ -1260,13 +1262,13 @@ jobs:
           EOF
           
           echo "✅ API key file created with properly escaped multiline key"
-          
-          # Don't echo the actual JSON to avoid leaking secrets in logs
-          echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
-      - name: Create exportOptions.plist
+      - name: Create exportOptions.plist (Enhanced)
         working-directory: ./private-repo
         run: |
+          echo "📝 Creating exportOptions.plist with enhanced validation..."
+          
+          # Create exportOptions.plist with all required settings for Xcode 16
           cat > ios/exportOptions.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1283,9 +1285,15 @@ jobs:
               <key>compileBitcode</key>
               <false/>
               <key>manageAppVersionAndBuildNumber</key>
-              <false/>  <!-- CHANGE THIS FROM true TO false -->
+              <false/>
               <key>signingStyle</key>
               <string>manual</string>
+              <key>destination</key>
+              <string>upload</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>thinning</key>
+              <string>&lt;none&gt;</string>
               <key>provisioningProfiles</key>
               <dict>
                   <key>${{ needs.setup.outputs.ios_bundle_id }}</key>
@@ -1296,13 +1304,52 @@ jobs:
           </dict>
           </plist>
           EOF
+          
+          echo "✅ exportOptions.plist created"
+          
+          # Validate the plist file
+          if plutil -lint ios/exportOptions.plist; then
+            echo "✅ exportOptions.plist is valid XML"
+          else
+            echo "❌ exportOptions.plist has XML syntax errors"
+            cat ios/exportOptions.plist
+            exit 1
+          fi
 
-      - name: Build & Archive
+      - name: Build & Archive (Enhanced with Export Debugging)
         working-directory: ./private-repo
         run: |
-          echo "🔨 Building iOS app on GitHub runner (quiet mode)..."
+          echo "🔨 Building iOS app with enhanced debugging..."
           
-          # Clean build with comprehensive error suppression
+          # Set up paths explicitly
+          IOS_DIR="${{ github.workspace }}/private-repo/ios"
+          ARCHIVE_PATH="${{ github.workspace }}/private-repo/ios/build/Archive.xcarchive"
+          EXPORT_PATH="${{ github.workspace }}/private-repo/ios/build/export"
+          
+          echo "📍 Build paths:"
+          echo "  iOS Dir: $IOS_DIR"
+          echo "  Archive Path: $ARCHIVE_PATH"
+          echo "  Export Path: $EXPORT_PATH"
+          echo "  Working Directory: $(pwd)"
+          
+          # Clean and create build directories
+          echo "🧹 Cleaning and preparing build directories..."
+          rm -rf "$IOS_DIR/build"
+          mkdir -p "$IOS_DIR/build"
+          mkdir -p "$(dirname "$EXPORT_PATH")"  # Ensure parent directory exists
+          echo "✅ Build directories prepared"
+          
+          # Verify exportOptions.plist exists and is valid
+          if [ ! -f "ios/exportOptions.plist" ]; then
+            echo "❌ exportOptions.plist not found!"
+            exit 1
+          fi
+          echo "📋 exportOptions.plist found and readable"
+          
+          # Archive with enhanced error handling
+          echo "🏗️ Creating archive..."
+          set -e  # Exit on any error
+          
           xcodebuild clean archive \
             -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
             -scheme ${{ needs.setup.outputs.ios_scheme }} \
@@ -1310,7 +1357,6 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
-            -quiet \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
             ENABLE_BITCODE=NO \
@@ -1321,32 +1367,87 @@ jobs:
             SWIFT_COMPILATION_MODE=wholemodule \
             VALIDATE_WORKSPACE=NO \
             ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS=NO \
-            2>&1 | grep -E "(error:|failed:|Error:|FAILED:|BUILD FAILED|✅|🔨)" || true
+            2>&1 | tee archive.log
           
-          echo "🔨 Exporting archive..."
-          xcodebuild -exportArchive \
+          # Verify archive was created
+          if [ ! -d "$ARCHIVE_PATH" ]; then
+            echo "❌ Archive was not created at: $ARCHIVE_PATH"
+            echo "📄 Archive log:"
+            cat archive.log | tail -50
+            exit 1
+          fi
+          echo "✅ Archive created successfully"
+          
+          # List archive contents for debugging
+          echo "📦 Archive contents:"
+          find "$ARCHIVE_PATH" -type f -name "*.app" | head -5
+          
+          # Export with detailed error handling
+          echo "📦 Exporting archive..."
+          
+          # Ensure export directory exists before export
+          mkdir -p "$EXPORT_PATH"
+          
+          # Export with verbose error reporting
+          if ! xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist ios/exportOptions.plist \
             -exportPath "$EXPORT_PATH" \
-            -quiet \
-            2>&1 | grep -E "(error:|failed:|Error:|FAILED:|BUILD FAILED|✅|🔨)" || true
+            -verbose 2>&1 | tee export.log; then
           
-          echo "✅ iOS build completed"
-
-      - name: Upload to TestFlight
-        working-directory: ./private-repo/ios
-        run: |
-          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
-          export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
-          echo "📱 Uploading IPA: $IPA_PATH"
+            echo "❌ Export failed. Checking details..."
+            echo "📄 Export log (last 50 lines):"
+            cat export.log | tail -50
           
-          if [ ! -f "$IPA_PATH" ]; then
-            echo "❌ IPA not found at: $IPA_PATH"
-            echo "Available files:"
-            find build/export -name "*.ipa" || ls -la build/export/
+            echo "📂 Export path contents:"
+            ls -la "$EXPORT_PATH" || echo "Export directory does not exist"
+          
+            echo "📂 Build directory contents:"
+            find "$IOS_DIR/build" -type f -name "*.ipa" -o -name "*.app" | head -10
+          
             exit 1
           fi
           
+          # Verify IPA was created
+          IPA_PATH="$EXPORT_PATH/${{ needs.setup.outputs.ios_scheme }}.ipa"
+          if [ ! -f "$IPA_PATH" ]; then
+            echo "❌ IPA not found at expected location: $IPA_PATH"
+            echo "📂 Export directory contents:"
+            ls -la "$EXPORT_PATH/"
+            echo "📂 Looking for any IPA files:"
+            find "$IOS_DIR/build" -name "*.ipa"
+            exit 1
+          fi
+          
+          echo "✅ iOS build and export completed successfully"
+          echo "📱 IPA created at: $IPA_PATH"
+          echo "📊 IPA size: $(du -h "$IPA_PATH" | cut -f1)"
+
+      - name: Upload to TestFlight (Enhanced Error Handling)
+        working-directory: ./private-repo/ios
+        run: |
+          echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
+          
+          # Use relative path from ios directory
+          export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
+          echo "📱 Uploading IPA: $IPA_PATH"
+          
+          # Verify IPA exists from ios directory perspective
+          if [ ! -f "$IPA_PATH" ]; then
+            echo "❌ IPA not found at: $IPA_PATH"
+            echo "📂 Current directory: $(pwd)"
+            echo "📂 Available files in build/export:"
+            ls -la build/export/ || echo "build/export directory does not exist"
+            echo "📂 Searching for IPA files:"
+            find build -name "*.ipa" 2>/dev/null || echo "No IPA files found in build directory"
+            exit 1
+          fi
+          
+          echo "✅ IPA found, proceeding with upload"
+          echo "📊 IPA details:"
+          ls -lah "$IPA_PATH"
+          
+          # Run fastlane upload
           fastlane ios beta
 
       - name: Set iOS Build Status

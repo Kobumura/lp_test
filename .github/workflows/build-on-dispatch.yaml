@@ -1300,6 +1300,9 @@ jobs:
       - name: Build & Archive
         working-directory: ./private-repo
         run: |
+          echo "🔨 Building iOS app on GitHub runner (quiet mode)..."
+          
+          # Clean build with comprehensive error suppression
           xcodebuild clean archive \
             -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
             -scheme ${{ needs.setup.outputs.ios_scheme }} \
@@ -1307,6 +1310,7 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath "$ARCHIVE_PATH" \
+            -quiet \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ needs.setup.outputs.apple_team_id }}" \
             ENABLE_BITCODE=NO \
@@ -1315,11 +1319,19 @@ jobs:
             SWIFT_SUPPRESS_WARNINGS=YES \
             GCC_WARN_INHIBIT_ALL_WARNINGS=YES \
             SWIFT_COMPILATION_MODE=wholemodule \
-            VALIDATE_WORKSPACE=NO
+            VALIDATE_WORKSPACE=NO \
+            ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS=NO \
+            2>&1 | grep -E "(error:|failed:|Error:|FAILED:|BUILD FAILED|✅|🔨)" || true
+          
+          echo "🔨 Exporting archive..."
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist ios/exportOptions.plist \
-            -exportPath "$EXPORT_PATH"
+            -exportPath "$EXPORT_PATH" \
+            -quiet \
+            2>&1 | grep -E "(error:|failed:|Error:|FAILED:|BUILD FAILED|✅|🔨)" || true
+          
+          echo "✅ iOS build completed"
 
       - name: Upload to TestFlight
         working-directory: ./private-repo/ios

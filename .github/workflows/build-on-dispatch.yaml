@@ -156,12 +156,12 @@ jobs:
           
           # Set runner types based on speed preference
           if [ "$SPEED" = "fast" ]; then
-            IOS_RUNNER="macos-15"
+            IOS_RUNNER="macos-14"
             ANDROID_RUNNER="buildjet-4vcpu-ubuntu-2204"
             USE_BUILDJET="true"
             USE_WARPBUILD="true"
           else
-            IOS_RUNNER="macos-15"
+            IOS_RUNNER="macos-14"
             ANDROID_RUNNER="ubuntu-latest"
             USE_BUILDJET="false"
             USE_WARPBUILD="false"

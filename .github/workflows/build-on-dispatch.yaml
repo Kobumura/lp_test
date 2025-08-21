@@ -1299,6 +1299,7 @@ jobs:
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist ios/exportOptions.plist \
             -exportPath "$EXPORT_PATH"
+            -quiet
 
       - name: Upload to TestFlight
         working-directory: ./private-repo/ios

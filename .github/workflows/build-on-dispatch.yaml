@@ -1289,6 +1289,7 @@ jobs:
             -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
             -scheme ${{ needs.setup.outputs.ios_scheme }} \
             -configuration Release \
+            -destination "generic/platform=iOS" \
             -sdk iphoneos \
             -archivePath "$ARCHIVE_PATH" \
             CODE_SIGN_STYLE=Manual \

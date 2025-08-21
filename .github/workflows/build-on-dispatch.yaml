@@ -19,9 +19,9 @@ on:
         type: choice
         options: [github, fast]
         default: 'github'
-      # ðŸ”§ DEVELOPMENT MODE
+      # 🔧 DEVELOPMENT MODE
       dev_mode:
-        description: 'ðŸ”§ Dev Mode: Skip tests for pipeline development'
+        description: '🔧 Dev Mode: Skip tests for pipeline development'
         type: boolean
         default: true
 
@@ -59,7 +59,7 @@ jobs:
       - name: Configure Build
         id: config
         run: |
-          echo "ðŸŽ¯ LittlePipes Configuration"
+          echo "🎯 LittlePipes Configuration"
           
           # Determine source of inputs
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
@@ -110,16 +110,16 @@ jobs:
             CUSTOM_BUILD_NUMBER=""
           fi
           
-          # ðŸ”§ DEVELOPMENT MODE PROCESSING
+          # 🔧 DEVELOPMENT MODE PROCESSING
           if [ "$DEV_MODE" = "true" ]; then
-            echo "ðŸ”§ðŸ”§ðŸ”§ DEVELOPMENT MODE ACTIVATED ðŸ”§ðŸ”§ðŸ”§"
-            echo "âš¡ SKIPPING ALL TESTS FOR FASTER ITERATION"
-            echo "ðŸ› ï¸ FOR PIPELINE DEVELOPMENT ONLY"
+            echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVATED 🔧🔧🔧"
+            echo "⚡ SKIPPING ALL TESTS FOR FASTER ITERATION"
+            echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
             RUN_UI_TESTS="false"
             RUN_UNIT_TESTS="false"
           fi
           
-          echo "ðŸ“‹ Input Configuration:"
+          echo "📋 Input Configuration:"
           echo "  Target Repo: $TARGET_REPO"
           echo "  Target Ref: $TARGET_REF"
           echo "  Target SHA: $TARGET_SHA"
@@ -168,7 +168,7 @@ jobs:
           fi
           
           echo ""
-          echo "ðŸš€ Computed Configuration:"
+          echo "🚀 Computed Configuration:"
           echo "  Build iOS: $BUILD_IOS"
           echo "  Build Android: $BUILD_ANDROID"
           echo "  iOS Runner: $IOS_RUNNER"
@@ -204,7 +204,7 @@ jobs:
           echo "custom_build_number=$CUSTOM_BUILD_NUMBER" >> $GITHUB_OUTPUT
           
           echo ""
-          echo "âœ… Configuration complete!"
+          echo "✅ Configuration complete!"
 
   # Unit Tests (Fast fail gate) - SKIPPED IN DEV MODE
   unit-tests:
@@ -243,9 +243,9 @@ jobs:
       - name: Run Unit Tests
         working-directory: ./private-repo
         run: |
-          echo "ðŸ§ª Running unit tests..."
+          echo "🧪 Running unit tests..."
           npm test -- --coverage --watchAll=false
-          echo "âœ… Unit tests completed!"
+          echo "✅ Unit tests completed!"
 
   # App Store Connect Query for iOS - FIXED WITH JSON ESCAPING AND LANE NAME
   app-store-query:
@@ -263,23 +263,23 @@ jobs:
     steps:
       - name: Install Fastlane
         run: |
-          echo "ðŸ“¦ Installing Fastlane for App Store Connect queries..."
+          echo "📦 Installing Fastlane for App Store Connect queries..."
           gem install fastlane --no-document
-          echo "âœ… Fastlane installed"
+          echo "✅ Fastlane installed"
 
       - name: Setup App Store Connect API Key (Fixed JSON Escaping)
         run: |
-          echo "ðŸ”‘ Setting up App Store Connect API key with proper JSON escaping..."
+          echo "🔑 Setting up App Store Connect API key with proper JSON escaping..."
           
           # Create proper directory structure
           mkdir -p ios/fastlane
           
           # Get the key (base64 or direct)
           if [ -n "$ASC_API_KEY_P8_B64" ]; then
-            echo "ðŸ”‘ Using base64 encoded key"
+            echo "🔑 Using base64 encoded key"
             KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
           else
-            echo "ðŸ”‘ Using direct key"
+            echo "🔑 Using direct key"
             KEY="$ASC_API_KEY_P8_REPO"
           fi
           
@@ -297,18 +297,18 @@ jobs:
           }
           EOF
           
-          echo "âœ… API key file created with properly escaped multiline key"
+          echo "✅ API key file created with properly escaped multiline key"
           
           # Don't echo the actual JSON to avoid leaking secrets in logs
-          echo "ðŸ“„ API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
+          echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
       - name: Query App Store Connect (Fixed Lane Name)
         id: query
         working-directory: ios
         run: |
-          echo "ðŸ” Querying App Store Connect for latest TestFlight build..."
-          echo "ðŸ“‹ Bundle ID: ${{ needs.setup.outputs.ios_bundle_id }}"
-          echo "ðŸ“ Working from: $(pwd)"
+          echo "🔍 Querying App Store Connect for latest TestFlight build..."
+          echo "📋 Bundle ID: ${{ needs.setup.outputs.ios_bundle_id }}"
+          echo "📁 Working from: $(pwd)"
           
           # Create Fastfile with fixed lane name (query_build_number instead of get_build_number)
           cat > fastlane/Fastfile << 'EOF'
@@ -337,7 +337,7 @@ jobs:
           
           # Run the query with the fixed lane name
           if OUTPUT=$(fastlane query_build_number 2>&1); then
-            echo "âœ… Fastlane query completed"
+            echo "✅ Fastlane query completed"
             # Don't echo full output to avoid leaking secrets
           
             # Parse the result
@@ -345,24 +345,24 @@ jobs:
               LATEST_ASC_BUILD=$(echo "$OUTPUT" | grep "SUCCESS:" | sed 's/.*SUCCESS://' | tr -d ' ')
               if [[ "$LATEST_ASC_BUILD" =~ ^[0-9]+$ ]] && [ "$LATEST_ASC_BUILD" -gt 0 ]; then
                 SUCCESS="true"
-                echo "ðŸŽ¯ Found build number: $LATEST_ASC_BUILD"
+                echo "🎯 Found build number: $LATEST_ASC_BUILD"
               else
                 LATEST_ASC_BUILD="0"
                 SUCCESS="false"
-                echo "âš ï¸ Invalid build number format"
+                echo "⚠️ Invalid build number format"
               fi
             else
               LATEST_ASC_BUILD="0"
               SUCCESS="false"
-              echo "âŒ No SUCCESS marker found in output"
+              echo "❌ No SUCCESS marker found in output"
             fi
           else
-            echo "âŒ Fastlane query failed"
+            echo "❌ Fastlane query failed"
             LATEST_ASC_BUILD="0"
             SUCCESS="false"
           fi
           
-          echo "ðŸ“‹ Final result: LATEST_ASC_BUILD=$LATEST_ASC_BUILD, SUCCESS=$SUCCESS"
+          echo "📋 Final result: LATEST_ASC_BUILD=$LATEST_ASC_BUILD, SUCCESS=$SUCCESS"
           echo "build_number=$LATEST_ASC_BUILD" >> $GITHUB_OUTPUT
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
 
@@ -382,38 +382,38 @@ jobs:
           GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
           GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
-          echo "ðŸ”‘ Setting up Google Play credentials..."
+          echo "🔑 Setting up Google Play credentials..."
 
           if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
             echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
             echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
           else
-            echo "âŒ No Google Play service account JSON available"
+            echo "❌ No Google Play service account JSON available"
             exit 1
           fi
 
           # Verify the JSON file is valid
-          echo "ðŸ” Validating JSON file..."
+          echo "🔍 Validating JSON file..."
           if python3 -m json.tool /tmp/google-play-key.json > /dev/null; then
-            echo "âœ… JSON file is valid"
+            echo "✅ JSON file is valid"
           else
-            echo "âŒ JSON file is invalid"
+            echo "❌ JSON file is invalid"
             exit 1
           fi
 
       - name: Install Codemagic CLI Tools
         run: |
-          echo "ðŸ“¦ Installing Codemagic CLI tools..."
+          echo "📦 Installing Codemagic CLI tools..."
           pip install --default-timeout=100 codemagic-cli-tools
-          echo "âœ… Codemagic CLI tools installed"
+          echo "✅ Codemagic CLI tools installed"
           google-play --version
 
       - name: Query Google Play Console for Full Version Info
         id: query
         run: |
-          echo "ðŸ” Querying Google Play Console for full version information..."
-          echo "ðŸ“‹ Package Name: ${{ needs.setup.outputs.android_package_name }}"
+          echo "🔍 Querying Google Play Console for full version information..."
+          echo "📋 Package Name: ${{ needs.setup.outputs.android_package_name }}"
 
           # Create Python script for version parsing
           cat > parse_versions.py << 'EOF'
@@ -456,7 +456,7 @@ jobs:
           highest_version_build = 0
           highest_build_overall = 0
 
-          print("ðŸ“Š Found versions in tracks:")
+          print("📊 Found versions in tracks:")
           print("-" * 50)
 
           for track, version_name, build_code in tracks:
@@ -485,8 +485,8 @@ jobs:
 
           # Output results
           if highest_version_obj:
-              print(f"\nâœ… Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
-              print(f"ðŸ“¦ Highest BUILD overall: {highest_build_overall}")
+              print(f"\n✅ Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
+              print(f"📦 Highest BUILD overall: {highest_build_overall}")
 
               # Use the highest semantic version, but ensure build number is always higher
               safe_build = max(highest_build_overall + 10, highest_version_build + 10)
@@ -505,14 +505,14 @@ jobs:
           # Query all tracks and capture output
           TRACK_OUTPUT=""
           for TRACK in "internal" "alpha" "beta" "production"; do
-            echo "ðŸ” Checking track: $TRACK"
+            echo "🔍 Checking track: $TRACK"
 
             if OUTPUT=$(google-play tracks get \
                 --package-name "${{ needs.setup.outputs.android_package_name }}" \
                 --track "$TRACK" \
                 --credentials "@file:/tmp/google-play-key.json" 2>&1); then
               TRACK_OUTPUT="${TRACK_OUTPUT}${OUTPUT}\n"
-              echo "âœ… Got track data"
+              echo "✅ Got track data"
             fi
           done
 
@@ -546,7 +546,7 @@ jobs:
           fi
 
           echo ""
-          echo "ðŸ“‹ Final results:"
+          echo "📋 Final results:"
           echo "  Version: $HIGHEST_VERSION (from $VERSION_SOURCE track)"
           echo "  Build: $HIGHEST_BUILD (with safety buffer)"
           echo "  Success: $SUCCESS"
@@ -591,7 +591,7 @@ jobs:
       # Maestro Setup with proper PATH persistence
       - name: Setup Maestro
         run: |
-          echo "ðŸ“¦ Installing Maestro..."
+          echo "📦 Installing Maestro..."
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> $GITHUB_PATH
           $HOME/.maestro/bin/maestro --version
@@ -600,20 +600,20 @@ jobs:
         if: needs.setup.outputs.use_warpbuild == 'true'
         working-directory: ./private-repo
         run: |
-          echo "ðŸš€ Configuring WarpBuild for optimal performance..."
+          echo "🚀 Configuring WarpBuild for optimal performance..."
           sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
           xcodebuild -version
           cd ios
           rm -rf Pods/ Podfile.lock
           rm -rf ~/Library/Caches/CocoaPods
           pod repo update --silent
-          echo "âœ… WarpBuild compatibility configuration complete"
+          echo "✅ WarpBuild compatibility configuration complete"
           cd ..
 
       - name: Simple Xcode Setup
         if: needs.setup.outputs.use_warpbuild == 'false'
         run: |
-          echo "ðŸ”§ Using available Xcode installation..."
+          echo "🔧 Using available Xcode installation..."
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
 
@@ -621,44 +621,44 @@ jobs:
         working-directory: ./private-repo/ios
         run: |
           if [[ "${{ needs.setup.outputs.use_warpbuild }}" == "true" ]]; then
-            echo "ðŸ“¦ Installing CocoaPods with WarpBuild optimizations..."
+            echo "📦 Installing CocoaPods with WarpBuild optimizations..."
             pod install --clean-install --repo-update
           else
-            echo "ðŸ“¦ Installing CocoaPods with standard configuration..."
+            echo "📦 Installing CocoaPods with standard configuration..."
             pod install
           fi
-          echo "âœ… CocoaPods installation complete"
+          echo "✅ CocoaPods installation complete"
 
       - name: Start Metro Bundler
         working-directory: ./private-repo
         run: |
-          echo "ðŸš€ Starting Metro bundler..."
+          echo "🚀 Starting Metro bundler..."
           npx react-native start --reset-cache > metro.log 2>&1 &
           METRO_PID=$!
           echo $METRO_PID > metro.pid
           echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
           
-          echo "â±ï¸ Waiting for Metro to be ready..."
+          echo "⏱️ Waiting for Metro to be ready..."
           for i in {1..60}; do
             if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
-              echo "âœ… Metro is ready after ${i} attempts"
+              echo "✅ Metro is ready after ${i} attempts"
               break
             fi
             if [ $i -eq 60 ]; then
-              echo "âŒ Metro failed to start after 60 attempts"
+              echo "❌ Metro failed to start after 60 attempts"
               cat metro.log
               exit 1
             fi
-            echo "â³ Metro not ready yet, attempt $i/60..."
+            echo "⏳ Metro not ready yet, attempt $i/60..."
             sleep 2
           done
           
-          echo "â±ï¸ Additional wait for Metro stability..."
+          echo "⏱️ Additional wait for Metro stability..."
           sleep 15
 
       - name: Start iOS Simulator
         run: |
-          echo "ðŸŽ Creating iOS Simulator..."
+          echo "🍎 Creating iOS Simulator..."
           SIMULATOR_ID=$(xcrun simctl create "Test-iPhone" "iPhone 15" 2>/dev/null || \
                         xcrun simctl create "Test-iPhone" "iPhone 14" 2>/dev/null || \
                         xcrun simctl create "Test-iPhone" "iPhone 13" 2>/dev/null)
@@ -668,27 +668,27 @@ jobs:
           
           xcrun simctl boot $SIMULATOR_ID
           
-          echo "â±ï¸ Waiting for simulator to be ready..."
+          echo "⏱️ Waiting for simulator to be ready..."
           for i in {1..30}; do
             if xcrun simctl list devices | grep "$SIMULATOR_ID" | grep -q "Booted"; then
-              echo "âœ… Simulator is booted after ${i} attempts"
+              echo "✅ Simulator is booted after ${i} attempts"
               break
             fi
             if [ $i -eq 30 ]; then
-              echo "âŒ Simulator failed to boot after 30 attempts"
+              echo "❌ Simulator failed to boot after 30 attempts"
               exit 1
             fi
-            echo "â³ Simulator not ready yet, attempt $i/30..."
+            echo "⏳ Simulator not ready yet, attempt $i/30..."
             sleep 3
           done
           
-          echo "â±ï¸ Additional wait for simulator stability..."
+          echo "⏱️ Additional wait for simulator stability..."
           sleep 10
 
       - name: Build iOS App for Testing
         working-directory: ./private-repo
         run: |
-          echo "ðŸ”¨ Building iOS app for simulator..."
+          echo "🔨 Building iOS app for simulator..."
           cd ios
           xcodebuild \
             -workspace ${{ needs.setup.outputs.ios_workspace }} \
@@ -697,28 +697,28 @@ jobs:
             -sdk iphonesimulator \
             -derivedDataPath ./build \
             build
-          echo "âœ… iOS app built successfully for testing"
+          echo "✅ iOS app built successfully for testing"
 
       - name: Install App on Simulator
         working-directory: ./private-repo
         run: |
-          echo "ðŸ“² Installing app on simulator..."  
+          echo "📲 Installing app on simulator..."  
           APP_PATH=$(find ios/build -name "${{ needs.setup.outputs.ios_scheme }}.app" | head -1)  
           echo "App path: $APP_PATH"  
           xcrun simctl install "$SIMULATOR_ID" "$APP_PATH"  
-          echo "âœ… App installed on simulator"
+          echo "✅ App installed on simulator"
 
       - name: Launch App and Wait for Bundle
         run: |
-          echo "ðŸš€ Launching app..."
+          echo "🚀 Launching app..."
           xcrun simctl launch "$SIMULATOR_ID" ${{ needs.setup.outputs.ios_bundle_id }}
-          echo "â±ï¸ Waiting for app installation and initial load..."
+          echo "⏱️ Waiting for app installation and initial load..."
           sleep 30
 
       - name: Run Maestro UI Tests
         working-directory: ./private-repo
         run: |
-          echo "ðŸ§ª Running Maestro UI tests..."
+          echo "🧪 Running Maestro UI tests..."
           
           UI_TEST_SUCCESS=true
           if command -v maestro &> /dev/null; then
@@ -737,11 +737,11 @@ jobs:
           UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
           
           if [[ "$UI_TEST_SUCCESS" == "true" ]]; then
-            echo "status=âœ… iOS UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "status=✅ iOS UI Tests Passed" >> $GITHUB_OUTPUT
             echo "details=iOS Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=true" >> $GITHUB_OUTPUT
           else
-            echo "status=âŒ iOS UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "status=❌ iOS UI Tests Failed" >> $GITHUB_OUTPUT
             echo "details=iOS Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=false" >> $GITHUB_OUTPUT
           fi
@@ -852,7 +852,7 @@ jobs:
       # Maestro Setup with proper PATH persistence
       - name: Setup Maestro
         run: |
-          echo "ðŸ“¦ Installing Maestro..."
+          echo "📦 Installing Maestro..."
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> $GITHUB_PATH
           $HOME/.maestro/bin/maestro --version
@@ -912,42 +912,42 @@ jobs:
       - name: Start Metro Bundler
         working-directory: ./private-repo
         run: |
-          echo "ðŸš€ Starting Metro bundler..."
+          echo "🚀 Starting Metro bundler..."
           npx react-native start --reset-cache > metro.log 2>&1 &
           METRO_PID=$!
           echo $METRO_PID > metro.pid
           echo "METRO_PID=$METRO_PID" >> $GITHUB_ENV
           
-          echo "â±ï¸ Waiting for Metro to be ready..."
+          echo "⏱️ Waiting for Metro to be ready..."
           for i in {1..60}; do
             if curl -s http://localhost:8081/status | grep -q "packager-status:running"; then
-              echo "âœ… Metro is ready after ${i} attempts"
+              echo "✅ Metro is ready after ${i} attempts"
               break
             fi
             if [ $i -eq 60 ]; then
-              echo "âŒ Metro failed to start after 60 attempts"
+              echo "❌ Metro failed to start after 60 attempts"
               cat metro.log
               exit 1
             fi
-            echo "â³ Metro not ready yet, attempt $i/60..."
+            echo "⏳ Metro not ready yet, attempt $i/60..."
             sleep 2
           done
           
-          echo "â±ï¸ Additional wait for Metro stability..."
+          echo "⏱️ Additional wait for Metro stability..."
           sleep 15
 
       - name: Build Debug APK
         working-directory: ./private-repo/android
         timeout-minutes: 15
         run: |
-          echo "ðŸ”¨ Building Android app..."
+          echo "🔨 Building Android app..."
           ./gradlew assembleDebug --stacktrace
-          echo "âœ… Android APK built successfully"
+          echo "✅ Android APK built successfully"
           
           # Verify APK exists
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -f "$APK_PATH" ]; then
-            echo "âŒ APK not found at expected location: $APK_PATH"
+            echo "❌ APK not found at expected location: $APK_PATH"
             exit 1
           fi
 
@@ -965,14 +965,14 @@ jobs:
           working-directory: ./private-repo
           script: |
             TEST_FILE="signup-flow.yml"
-            echo "ðŸ“± Installing APK on emulator..."
+            echo "📱 Installing APK on emulator..."
             adb install android/app/build/outputs/apk/debug/app-debug.apk
-            echo "ðŸš€ Launching app..."
+            echo "🚀 Launching app..."
             adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity
             sleep 3
-            echo "ðŸ§ª Running Maestro UI tests"
+            echo "🧪 Running Maestro UI tests"
             maestro test ".maestro/$TEST_FILE"
-            echo "âœ… Android UI tests completed successfully"
+            echo "✅ Android UI tests completed successfully"
 
       - name: Set UI Test Results
         id: ui_test_results
@@ -981,11 +981,11 @@ jobs:
           UI_TEST_END=$(date +%s)
           UI_TEST_DURATION=$(( UI_TEST_END - UI_TEST_START ))
           if [[ "${{ job.status }}" == "success" ]]; then
-            echo "status=âœ… Android UI Tests Passed" >> $GITHUB_OUTPUT
+            echo "status=✅ Android UI Tests Passed" >> $GITHUB_OUTPUT
             echo "details=Android Maestro completed in ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=true" >> $GITHUB_OUTPUT
           else
-            echo "status=âŒ Android UI Tests Failed" >> $GITHUB_OUTPUT
+            echo "status=❌ Android UI Tests Failed" >> $GITHUB_OUTPUT
             echo "details=Android Maestro failed after ${UI_TEST_DURATION}s" >> $GITHUB_OUTPUT
             echo "passed=false" >> $GITHUB_OUTPUT
           fi
@@ -1035,14 +1035,14 @@ jobs:
       ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
       ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
     steps:
-      # ðŸ”§ DEV MODE WARNING
+      # 🔧 DEV MODE WARNING
       - name: Development Mode Warning
         if: needs.setup.outputs.dev_mode == 'true'
         run: |
-          echo "ðŸ”§ðŸ”§ðŸ”§ DEVELOPMENT MODE ACTIVE ðŸ”§ðŸ”§ðŸ”§"
-          echo "âš¡ TESTS WERE SKIPPED FOR FAST ITERATION"
-          echo "ðŸ› ï¸ FOR PIPELINE DEVELOPMENT ONLY"
-          echo "ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§"
+          echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
+          echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
+          echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
+          echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
 
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
@@ -1090,7 +1090,7 @@ jobs:
           CUSTOM_VERSION="${{ needs.setup.outputs.custom_version }}"
           CUSTOM_BUILD_NUMBER="${{ needs.setup.outputs.custom_build_number }}"
           
-          echo "ðŸ“‹ iOS Version Management:"
+          echo "📋 iOS Version Management:"
           echo "  Current Version: $CURRENT_VERSION (build $CURRENT_BUILD)"
           echo "  Version Strategy: $VERSION_STRATEGY"
           
@@ -1098,15 +1098,15 @@ jobs:
           case "$VERSION_STRATEGY" in
             "major")
               NEXT_VERSION="$((MAJOR + 1)).0.0"
-              echo "  Major increment: $CURRENT_VERSION â†’ $NEXT_VERSION"
+              echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION"
               ;;
             "minor")
               NEXT_VERSION="$MAJOR.$((MINOR + 1)).0"
-              echo "  Minor increment: $CURRENT_VERSION â†’ $NEXT_VERSION"
+              echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION"
               ;;
             "patch")
               NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  Patch increment: $CURRENT_VERSION â†’ $NEXT_VERSION"
+              echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION"
               ;;
             "custom")
               if [ -n "$CUSTOM_VERSION" ]; then
@@ -1123,13 +1123,13 @@ jobs:
               ;;
             *)  # "auto" or default
               NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  Auto increment (patch): $CURRENT_VERSION â†’ $NEXT_VERSION"
+              echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION"
               ;;
           esac
           
           # Determine build number - ENHANCED DEBUGGING
           echo ""
-          echo "ðŸ” DEBUG: App Store Query Results:"
+          echo "🔍 DEBUG: App Store Query Results:"
           echo "  needs.app-store-query.outputs.latest_build_number = '${{ needs.app-store-query.outputs.latest_build_number }}'"
           echo "  needs.app-store-query.outputs.query_success = '${{ needs.app-store-query.outputs.query_success }}'"
           
@@ -1142,7 +1142,7 @@ jobs:
             APP_STORE_SUCCESS="${{ needs.app-store-query.outputs.query_success }}"
           
             echo ""
-            echo "ðŸ” DEBUG: Local Variables:"
+            echo "🔍 DEBUG: Local Variables:"
             echo "  LATEST_APP_STORE_BUILD = '$LATEST_APP_STORE_BUILD'"
             echo "  APP_STORE_SUCCESS = '$APP_STORE_SUCCESS'"
             echo "  CURRENT_BUILD = '$CURRENT_BUILD'"
@@ -1151,8 +1151,8 @@ jobs:
             if [ "$APP_STORE_SUCCESS" = "true" ] && [ -n "$LATEST_APP_STORE_BUILD" ] && [ "$LATEST_APP_STORE_BUILD" != "0" ]; then
               NEXT_BUILD=$((LATEST_APP_STORE_BUILD + 1))
               STRATEGY="App Store Connect + 1 (store-first)"
-              echo "  âœ… Using store-first approach"
-              echo "  Build number: $LATEST_APP_STORE_BUILD â†’ $NEXT_BUILD ($STRATEGY)"
+              echo "  ✅ Using store-first approach"
+              echo "  Build number: $LATEST_APP_STORE_BUILD → $NEXT_BUILD ($STRATEGY)"
             else
               # Fallback logic with better handling
               if [ -n "$CURRENT_BUILD" ] && [ "$CURRENT_BUILD" -ge 100 ]; then
@@ -1162,15 +1162,15 @@ jobs:
               fi
               NEXT_BUILD="$FALLBACK_BUILD"
               STRATEGY="Fallback (store query failed or returned invalid data)"
-              echo "  âš ï¸ Using fallback approach"
+              echo "  ⚠️ Using fallback approach"
               echo "  Build number: $NEXT_BUILD ($STRATEGY)"
               echo "  Reason: APP_STORE_SUCCESS='$APP_STORE_SUCCESS', LATEST_APP_STORE_BUILD='$LATEST_APP_STORE_BUILD'"
             fi
           fi
           
           echo ""
-          echo "âœ… Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
-          echo "ðŸ“ Strategy used: $STRATEGY"
+          echo "✅ Final iOS Version: $NEXT_VERSION (build $NEXT_BUILD)"
+          echo "📝 Strategy used: $STRATEGY"
           
           echo "NEXT_VERSION_NAME=$NEXT_VERSION" >> $GITHUB_ENV
           echo "NEXT_VERSION_CODE=$NEXT_BUILD" >> $GITHUB_ENV
@@ -1208,25 +1208,25 @@ jobs:
       - name: Setup Match certificates
         working-directory: ./private-repo/ios
         run: |
-          echo "ðŸ”‘ Setting up Match certificates for main app..."
+          echo "🔑 Setting up Match certificates for main app..."
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
           
-          echo "ðŸ”‘ Setting up Match certificates for OneSignal extension..."
+          echo "🔑 Setting up Match certificates for OneSignal extension..."
           fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
 
       - name: Setup App Store Connect API Key (Fixed JSON Escaping)
         run: |
-          echo "ðŸ”‘ Setting up App Store Connect API key with proper JSON escaping..."
+          echo "🔑 Setting up App Store Connect API key with proper JSON escaping..."
           
           # Create proper directory structure
           mkdir -p ios/fastlane
           
           # Get the key (base64 or direct)
           if [ -n "$ASC_API_KEY_P8_B64" ]; then
-            echo "ðŸ”‘ Using base64 encoded key"
+            echo "🔑 Using base64 encoded key"
             KEY=$(echo "$ASC_API_KEY_P8_B64" | base64 -d)
           else
-            echo "ðŸ”‘ Using direct key"
+            echo "🔑 Using direct key"
             KEY="$ASC_API_KEY_P8_REPO"
           fi
           
@@ -1244,10 +1244,10 @@ jobs:
           }
           EOF
           
-          echo "âœ… API key file created with properly escaped multiline key"
+          echo "✅ API key file created with properly escaped multiline key"
           
           # Don't echo the actual JSON to avoid leaking secrets in logs
-          echo "ðŸ“„ API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
+          echo "📄 API key file size: $(wc -c < ios/fastlane/api_key.json) bytes"
 
       - name: Create exportOptions.plist
         working-directory: ./private-repo
@@ -1304,10 +1304,10 @@ jobs:
         run: |
           echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
           export IPA_PATH="build/export/${{ needs.setup.outputs.ios_scheme }}.ipa"
-          echo "ðŸ“± Uploading IPA: $IPA_PATH"
+          echo "📱 Uploading IPA: $IPA_PATH"
           
           if [ ! -f "$IPA_PATH" ]; then
-            echo "âŒ IPA not found at: $IPA_PATH"
+            echo "❌ IPA not found at: $IPA_PATH"
             echo "Available files:"
             find build/export -name "*.ipa" || ls -la build/export/
             exit 1
@@ -1342,21 +1342,21 @@ jobs:
       ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
       LATEST_GOOGLE_PLAY_BUILD: ${{ needs.google-play-query.outputs.latest_build_number }}
     steps:
-      # ðŸ”§ DEV MODE WARNING
+      # 🔧 DEV MODE WARNING
       - name: Development Mode Warning
         if: needs.setup.outputs.dev_mode == 'true'
         run: |
-          echo "ðŸ”§ðŸ”§ðŸ”§ DEVELOPMENT MODE ACTIVE ðŸ”§ðŸ”§ðŸ”§"
-          echo "âš¡ TESTS WERE SKIPPED FOR FAST ITERATION"
-          echo "ðŸ› ï¸ FOR PIPELINE DEVELOPMENT ONLY"
-          echo "ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§ðŸ”§"
+          echo "🔧🔧🔧 DEVELOPMENT MODE ACTIVE 🔧🔧🔧"
+          echo "⚡ TESTS WERE SKIPPED FOR FAST ITERATION"
+          echo "🛠️ FOR PIPELINE DEVELOPMENT ONLY"
+          echo "🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧🔧"
 
       - name: Start Build Timer
         run: echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
 
       - name: Display Google Play Query Results
         run: |
-          echo "ðŸ” Google Play Console Query Results:"
+          echo "🔍 Google Play Console Query Results:"
           echo "  Latest Version Name: ${{ needs.google-play-query.outputs.latest_version_name }}"
           echo "  Latest Build Number: ${{ needs.google-play-query.outputs.latest_build_number }}"
           echo "  Version Source: ${{ needs.google-play-query.outputs.version_source }}"
@@ -1431,7 +1431,7 @@ jobs:
           FILE_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
           FILE_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
           
-          echo "ðŸ“‹ Android Version Management (Store-First):"
+          echo "📋 Android Version Management (Store-First):"
           echo "  File Version (ignored): $FILE_VERSION_NAME (build $FILE_VERSION_CODE)"
           
           # Version Strategy Logic
@@ -1446,7 +1446,7 @@ jobs:
           VERSION_SOURCE="${{ needs.google-play-query.outputs.version_source }}"
           
           echo ""
-          echo "ðŸª Store Query Results:"
+          echo "🏪 Store Query Results:"
           echo "  Store Version: $STORE_VERSION (build $STORE_BUILD)"
           echo "  Version Source: $VERSION_SOURCE track"
           echo "  Query Success: $STORE_SUCCESS"
@@ -1455,10 +1455,10 @@ jobs:
           # Use store version as base if successful, otherwise fall back to file
           if [ "$STORE_SUCCESS" = "true" ] && [ -n "$STORE_VERSION" ] && [ "$STORE_VERSION" != "0.0.0" ]; then
             CURRENT_VERSION="$STORE_VERSION"
-            echo "  âœ… Using store version as base: $CURRENT_VERSION"
+            echo "  ✅ Using store version as base: $CURRENT_VERSION"
           else
             CURRENT_VERSION="$FILE_VERSION_NAME"
-            echo "  âš ï¸ Using file version as fallback: $CURRENT_VERSION"
+            echo "  ⚠️ Using file version as fallback: $CURRENT_VERSION"
           fi
           
           # Parse current version components
@@ -1471,15 +1471,15 @@ jobs:
           case "$VERSION_STRATEGY" in
             "major")
               NEXT_VERSION_NAME="$((MAJOR + 1)).0.0"
-              echo "  Major increment: $CURRENT_VERSION â†’ $NEXT_VERSION_NAME"
+              echo "  Major increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
               ;;
             "minor")
               NEXT_VERSION_NAME="$MAJOR.$((MINOR + 1)).0"
-              echo "  Minor increment: $CURRENT_VERSION â†’ $NEXT_VERSION_NAME"
+              echo "  Minor increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
               ;;
             "patch")
               NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  Patch increment: $CURRENT_VERSION â†’ $NEXT_VERSION_NAME"
+              echo "  Patch increment: $CURRENT_VERSION → $NEXT_VERSION_NAME"
               ;;
             "custom")
               if [ -n "$CUSTOM_VERSION" ]; then
@@ -1496,7 +1496,7 @@ jobs:
               ;;
             *)  # "auto" or default
               NEXT_VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
-              echo "  Auto increment (patch): $CURRENT_VERSION â†’ $NEXT_VERSION_NAME"
+              echo "  Auto increment (patch): $CURRENT_VERSION → $NEXT_VERSION_NAME"
               ;;
           esac
           
@@ -1520,8 +1520,8 @@ jobs:
           fi
           
           echo ""
-          echo "âœ… Final Android Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
-          echo "ðŸ“ Version source: $([ "$STORE_SUCCESS" = "true" ] && echo "Google Play Store" || echo "build.gradle file")"
+          echo "✅ Final Android Version: $NEXT_VERSION_NAME (build $NEXT_BUILD)"
+          echo "📝 Version source: $([ "$STORE_SUCCESS" = "true" ] && echo "Google Play Store" || echo "build.gradle file")"
           
           # For the sed commands, we still need the file values
           echo "CURRENT_VERSION_NAME=$FILE_VERSION_NAME" >> $GITHUB_ENV
@@ -1532,9 +1532,9 @@ jobs:
       - name: Update Android version for build
         working-directory: ./private-repo/android/app
         run: |
-          echo "ðŸ”„ Updating Android version using enhanced version control..."
-          echo "  Version Name: $CURRENT_VERSION_NAME â†’ $NEXT_VERSION_NAME"
-          echo "  Version Code: $CURRENT_VERSION_CODE â†’ $NEXT_VERSION_CODE"
+          echo "🔄 Updating Android version using enhanced version control..."
+          echo "  Version Name: $CURRENT_VERSION_NAME → $NEXT_VERSION_NAME"
+          echo "  Version Code: $CURRENT_VERSION_CODE → $NEXT_VERSION_CODE"
           
           # Update version name
           sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
@@ -1543,7 +1543,7 @@ jobs:
           sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
           
           # Verify the changes
-          echo "âœ… Updated build.gradle:"
+          echo "✅ Updated build.gradle:"
           echo "$(grep versionName build.gradle)"
           echo "$(grep "versionCode project.hasProperty" build.gradle)"
 
@@ -1562,18 +1562,18 @@ jobs:
           GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
           GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
-          echo "ðŸ”‘ Setting up Google Play credentials for upload..."
+          echo "🔑 Setting up Google Play credentials for upload..."
           
           if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
             echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
             echo "$GOOGLE_PLAY_JSON_REPO" > /tmp/google-play-key.json
           else
-            echo "âŒ No Google Play service account JSON available"
+            echo "❌ No Google Play service account JSON available"
             exit 1
           fi
           
-          echo "âœ… Google Play credentials ready for upload"
+          echo "✅ Google Play credentials ready for upload"
 
       - name: Upload to Google Play
         uses: r0adkll/upload-google-play@v1
@@ -1590,10 +1590,10 @@ jobs:
         run: |
           echo "BUILD_END=$(date +%s)" >> $GITHUB_ENV
           if [[ "${{ job.status }}" == "success" ]]; then
-            echo "GOOGLE_PLAY_STATUS=âœ… Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
+            echo "GOOGLE_PLAY_STATUS=✅ Uploaded to Google Play (${{ needs.setup.outputs.track }}, build ${{ env.NEXT_VERSION_CODE }})" >> $GITHUB_ENV
             echo "success=true" >> $GITHUB_OUTPUT
           else
-            echo "GOOGLE_PLAY_STATUS=âŒ Google Play upload failed" >> $GITHUB_ENV
+            echo "GOOGLE_PLAY_STATUS=❌ Google Play upload failed" >> $GITHUB_ENV
             echo "success=false" >> $GITHUB_OUTPUT
           fi
 
@@ -1679,7 +1679,7 @@ jobs:
         if: needs.ios-build.result == 'success' || needs.android-build.result == 'success'
         working-directory: ./private-repo
         run: |
-          echo "ðŸ“ Committing version bumps..."
+          echo "📝 Committing version bumps..."
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
@@ -1707,20 +1707,20 @@ jobs:
             fi
           fi
           
-          COMMIT_MSG="${COMMIT_MSG}] ðŸš€ LP-23 [skip ci]"
+          COMMIT_MSG="${COMMIT_MSG}] 🚀 LP-23 [skip ci]"
           
           # Commit and push if there are changes
           if [ "$CHANGES_MADE" = true ] && ! git diff --staged --quiet; then
             git commit -m "$COMMIT_MSG"
             git push
-            echo "âœ… Version bumps committed and pushed"
+            echo "✅ Version bumps committed and pushed"
           else
-            echo "â„¹ï¸ No changes to commit"
+            echo "ℹ️ No changes to commit"
           fi
 
       - name: Debug Action Availability
         run: |
-          echo "ðŸ” Checking action availability..."
+          echo "🔍 Checking action availability..."
           echo "Current directory: $(pwd)"
           echo "Contents:"
           ls -la
@@ -1766,17 +1766,17 @@ jobs:
 
       - name: LittlePipes Build Summary
         run: |
-          echo "ðŸš€ LittlePipes Build Complete!"
+          echo "🚀 LittlePipes Build Complete!"
           echo "Target: ${{ needs.setup.outputs.target_repo }}"
           echo "Branch: ${{ needs.setup.outputs.target_ref }}"
           echo "Platform: ${{ needs.setup.outputs.build_ios == 'true' && 'iOS' || '' }}${{ needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.build_android == 'true' && ' + ' || '' }}${{ needs.setup.outputs.build_android == 'true' && 'Android' || '' }}"
           echo "Duration: ${{ steps.duration.outputs.duration_formatted }}"
-          echo "Overall Status: ${{ steps.results.outputs.overall_success == 'true' && 'âœ… SUCCESS' || 'âŒ FAILURE' }}"
+          echo "Overall Status: ${{ steps.results.outputs.overall_success == 'true' && '✅ SUCCESS' || '❌ FAILURE' }}"
           
           if [ "${{ needs.setup.outputs.dev_mode }}" = "true" ]; then
-            echo "ðŸ”§ DEV MODE: Tests were skipped for pipeline development"
+            echo "🔧 DEV MODE: Tests were skipped for pipeline development"
           else
-            echo "Tests: Unitâ†’${{ needs.unit-tests.result }}, iOS UIâ†’${{ needs.ios-ui-tests.result }}, Android UIâ†’${{ needs.android-ui-tests.result }}"
+            echo "Tests: Unit→${{ needs.unit-tests.result }}, iOS UI→${{ needs.ios-ui-tests.result }}, Android UI→${{ needs.android-ui-tests.result }}"
           fi
           
           echo "Store Queries:"
@@ -1785,20 +1785,20 @@ jobs:
           
           echo "Builds:"
           if [[ "${{ needs.ios-build.result }}" == "success" ]]; then
-            echo "  iOS: âœ… v${{ steps.results.outputs.ios_version }} (build ${{ steps.results.outputs.ios_build }})"
+            echo "  iOS: ✅ v${{ steps.results.outputs.ios_version }} (build ${{ steps.results.outputs.ios_build }})"
           else
             echo "  iOS: ${{ needs.ios-build.result }}"
           fi
           if [[ "${{ needs.android-build.result }}" == "success" ]]; then
-            echo "  Android: âœ… v${{ steps.results.outputs.android_version }} (build ${{ steps.results.outputs.android_build }})"
+            echo "  Android: ✅ v${{ steps.results.outputs.android_version }} (build ${{ steps.results.outputs.android_build }})"
           else
             echo "  Android: ${{ needs.android-build.result }}"
           fi
           
           if [ "${{ env.SLACK_WEBHOOK_URL }}" != "" ]; then
-            echo "ðŸ“± Slack notification sent"
+            echo "📱 Slack notification sent"
           else
-            echo "âš ï¸ Slack notification skipped (no webhook URL)"
+            echo "⚠️ Slack notification skipped (no webhook URL)"
           fi
           
-          echo "ðŸ‘‰ Monitor: https://github.com/${{ github.repository }}/actions"
+          echo "👉 Monitor: https://github.com/${{ github.repository }}/actions"

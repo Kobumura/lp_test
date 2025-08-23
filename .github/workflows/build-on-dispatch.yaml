@@ -1,4 +1,4 @@
-#Last modified 20250821
+#Last modified 20250822
 name: LittlePipes Unified Build, Test & Deploy
 on:
   repository_dispatch:
@@ -1281,6 +1281,38 @@ jobs:
           </dict>
           </plist>
           EOF
+
+      - name: Debug Xcode and Destinations
+        working-directory: ./private-repo
+        run: |
+          echo "🔍 Debugging Xcode setup and available destinations..."
+          
+          # Check Xcode version
+          echo "📱 Xcode Version:"
+          xcodebuild -version
+          echo ""
+          
+          # Check available SDKs
+          echo "📚 Available SDKs:"
+          xcodebuild -showsdks
+          echo ""
+          
+          # Check scheme and workspace
+          echo "🏗️ Workspace and Scheme Info:"
+          echo "Workspace: ${{ needs.setup.outputs.ios_workspace }}"
+          echo "Scheme: ${{ needs.setup.outputs.ios_scheme }}"
+          echo ""
+          
+          # List actual schemes in the workspace
+          echo "📋 Available schemes in workspace:"
+          xcodebuild -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" -list
+          echo ""
+          
+          # Check available destinations for the specific scheme
+          echo "🎯 Available destinations for scheme '${{ needs.setup.outputs.ios_scheme }}':"
+          xcodebuild -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
+            -scheme ${{ needs.setup.outputs.ios_scheme }} \
+            -showdestinations || echo "Failed to show destinations"  
 
       - name: Build & Archive
         working-directory: ./private-repo

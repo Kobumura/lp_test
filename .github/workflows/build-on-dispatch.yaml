@@ -55,6 +55,14 @@ jobs:
       version_strategy: ${{ steps.config.outputs.version_strategy }}
       custom_version: ${{ steps.config.outputs.custom_version }}
       custom_build_number: ${{ steps.config.outputs.custom_build_number }}
+      # Target-repo conventions detected once and reused by all downstream jobs.
+      # Lets the same pipeline serve repos with different package managers
+      # (yarn vs npm) and Android signing styles (gradle -P props vs
+      # keystore.properties file). See "Detect target conventions" step below.
+      package_manager: ${{ steps.detect.outputs.package_manager }}
+      lockfile: ${{ steps.detect.outputs.lockfile }}
+      install_command: ${{ steps.detect.outputs.install_command }}
+      signing_style: ${{ steps.detect.outputs.signing_style }}
     steps:
       - name: Configure Build
         id: config
@@ -206,6 +214,57 @@ jobs:
           echo ""
           echo "✅ Configuration complete!"
 
+      # Briefly clone the target repo to detect its conventions (package
+      # manager + Android signing style). Output as job outputs so every
+      # downstream job consumes the same answers without redoing the work.
+      - name: Checkout target for detection
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.config.outputs.target_repo }}
+          ref: ${{ steps.config.outputs.target_ref }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          path: ./target-detect
+
+      - name: Detect target conventions
+        id: detect
+        working-directory: ./target-detect
+        run: |
+          echo "🔍 Detecting target-repo conventions..."
+
+          # Package manager: yarn.lock wins if both exist (yarn convention is older).
+          if [ -f yarn.lock ]; then
+            PM="yarn"
+            LOCK="yarn.lock"
+            INSTALL="yarn install --frozen-lockfile"
+          elif [ -f package-lock.json ]; then
+            PM="npm"
+            LOCK="package-lock.json"
+            INSTALL="npm ci"
+          else
+            echo "::error::Target repo has neither yarn.lock nor package-lock.json"
+            exit 1
+          fi
+          echo "  Package manager: $PM (lockfile: $LOCK)"
+
+          # Android signing style: keystore.properties pattern OR gradle -P props.
+          # Detect by inspecting android/app/build.gradle for keystorePropertiesFile.
+          GRADLE_FILE="android/app/build.gradle"
+          if [ -f "$GRADLE_FILE" ] && grep -q "keystorePropertiesFile" "$GRADLE_FILE"; then
+            SIGNING="keystore_properties"
+          else
+            SIGNING="gradle_p"
+          fi
+          echo "  Android signing style: $SIGNING"
+
+          echo "package_manager=$PM" >> $GITHUB_OUTPUT
+          echo "lockfile=$LOCK" >> $GITHUB_OUTPUT
+          echo "install_command=$INSTALL" >> $GITHUB_OUTPUT
+          echo "signing_style=$SIGNING" >> $GITHUB_OUTPUT
+
+      - name: Clean up detection checkout
+        if: always()
+        run: rm -rf ./target-detect
+
   # Unit Tests (Fast fail gate) - SKIPPED IN DEV MODE
   unit-tests:
     runs-on: ${{ needs.setup.outputs.use_buildjet == 'true' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-latest' }}
@@ -225,20 +284,20 @@ jobs:
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Setup Node.js (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Install Dependencies
         working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
+        run: ${{ needs.setup.outputs.install_command }}
 
       - name: Run Unit Tests
         working-directory: ./private-repo
@@ -581,12 +640,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Install Dependencies
         working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
+        run: ${{ needs.setup.outputs.install_command }}
 
       # Maestro Setup with proper PATH persistence
       - name: Setup Maestro
@@ -800,20 +859,20 @@ jobs:
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Setup Node.js (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Install Dependencies
         working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
+        run: ${{ needs.setup.outputs.install_command }}
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -1065,12 +1124,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Install Dependencies
         working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
+        run: ${{ needs.setup.outputs.install_command }}
 
       - name: Read and determine next iOS version (FIXED WITH DEBUGGING)
         working-directory: ./private-repo
@@ -1425,20 +1484,20 @@ jobs:
         uses: buildjet/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Setup Node (default)
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'
-          cache-dependency-path: './private-repo/yarn.lock'
+          cache: ${{ needs.setup.outputs.package_manager }}
+          cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
       - name: Install Modules
         working-directory: ./private-repo
-        run: yarn install --frozen-lockfile
+        run: ${{ needs.setup.outputs.install_command }}
 
       - name: Cache Gradle (buildjet)
         if: needs.setup.outputs.use_buildjet == 'true'
@@ -1581,9 +1640,59 @@ jobs:
           echo "$(grep versionName build.gradle)"
           echo "$(grep "versionCode project.hasProperty" build.gradle)"
 
+      # Android signing supports two styles, detected in setup:
+      #   gradle_p           — build.gradle reads signing* via project.hasProperty().
+      #                         Passwords are passed at gradle invocation via -P flags.
+      #                         Keystore file is expected at android/app/release.keystore
+      #                         (committed to target repo OR decoded from
+      #                         ANDROID_KEYSTORE_BASE64 secret).
+      #   keystore_properties — build.gradle reads from android/keystore.properties.
+      #                         We write that file from secrets and decode the keystore
+      #                         from ANDROID_KEYSTORE_BASE64 (always required for this style;
+      #                         the keystore is never committed when this pattern is used).
+      - name: Setup Android signing
+        working-directory: ./private-repo/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ github.event.client_payload.secrets.ANDROID_KEYSTORE_BASE64 || secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="app/release.keystore"
+
+          # Materialize the keystore file. If it's already in the repo (LittleTalks
+          # pattern), use that. Otherwise decode from the payload secret.
+          if [ -f "$KEYSTORE_PATH" ]; then
+            echo "✓ Using committed release.keystore"
+          elif [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Decoding release.keystore from ANDROID_KEYSTORE_BASE64 secret"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          else
+            echo "::error::No release.keystore in target repo and no ANDROID_KEYSTORE_BASE64 secret provided"
+            exit 1
+          fi
+
+          # If the target uses the keystore.properties pattern, write that file
+          # so build.gradle finds it. The gradle_p pattern needs no setup file —
+          # passwords are passed at the bundleRelease command via -P flags.
+          if [ "${{ needs.setup.outputs.signing_style }}" = "keystore_properties" ]; then
+            echo "Writing android/keystore.properties (keystore_properties signing style)"
+            cat > keystore.properties <<EOF
+          storeFile=release.keystore
+          storePassword=$ANDROID_RELEASE_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_RELEASE_KEY_ALIAS
+          keyPassword=$ANDROID_RELEASE_KEY_PASSWORD
+          EOF
+          else
+            echo "Using gradle -P signing style (no keystore.properties needed)"
+          fi
+
       - name: Build Release AAB
         working-directory: ./private-repo/android
         run: |
+          # -P flags are read by the gradle_p signing style and ignored harmlessly
+          # by the keystore_properties style (which already loaded its values from
+          # the keystore.properties file written in the previous step).
+          # -PlittleVersionCode is LittleTalks-specific; harmless to pass to other
+          # repos (gradle ignores unknown -P props).
           ./gradlew bundleRelease \
             -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
             -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \

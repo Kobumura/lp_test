@@ -64,6 +64,19 @@ jobs:
       install_command: ${{ steps.detect.outputs.install_command }}
       signing_style: ${{ steps.detect.outputs.signing_style }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Configure Build
         id: config
         run: |
@@ -271,6 +284,19 @@ jobs:
     needs: setup
     if: needs.setup.outputs.run_unit_tests == 'true' && needs.setup.outputs.dev_mode == 'false'
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Checkout Private Repository
         uses: actions/checkout@v4
         with:
@@ -320,6 +346,19 @@ jobs:
       ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
       ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Install Fastlane
         run: |
           echo "📦 Installing Fastlane for App Store Connect queries..."
@@ -436,6 +475,19 @@ jobs:
       query_success: ${{ steps.query.outputs.success }}
       version_source: ${{ steps.query.outputs.version_source }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Prepare Google Play Credentials
         env:
           GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
@@ -625,6 +677,19 @@ jobs:
       ui_test_details: ${{ steps.ui_test_results.outputs.details }}
       ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Start UI Test Timer
         run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
 
@@ -843,6 +908,19 @@ jobs:
       ui_test_details: ${{ steps.ui_test_results.outputs.details }}
       ui_tests_passed: ${{ steps.ui_test_results.outputs.passed }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       - name: Start UI Test Timer
         run: echo "UI_TEST_START=$(date +%s)" >> $GITHUB_ENV
 
@@ -1094,6 +1172,19 @@ jobs:
       ASC_API_KEY_P8_REPO: ${{ secrets.ASC_API_KEY_P8 || '' }}
       ASC_ISSUER_ID: ${{ github.event.client_payload.secrets.ASC_ISSUER_ID || secrets.ASC_ISSUER_ID }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       # 🔧 DEV MODE WARNING
       - name: Development Mode Warning
         if: needs.setup.outputs.dev_mode == 'true'
@@ -1435,6 +1526,19 @@ jobs:
       ANDROID_RELEASE_KEY_PASSWORD: ${{ github.event.client_payload.secrets.ANDROID_RELEASE_KEY_PASSWORD || secrets.ANDROID_RELEASE_KEY_PASSWORD }}
       LATEST_GOOGLE_PLAY_BUILD: ${{ needs.google-play-query.outputs.latest_build_number }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       # 🔧 DEV MODE WARNING
       - name: Development Mode Warning
         if: needs.setup.outputs.dev_mode == 'true'
@@ -1688,6 +1792,10 @@ jobs:
       - name: Build Release AAB
         working-directory: ./private-repo/android
         run: |
+          # gradlew is often committed without the executable bit (Windows-developed
+          # repos don't track Unix file modes). Make it executable before invoking.
+          chmod +x gradlew
+
           # -P flags are read by the gradle_p signing style and ignored harmlessly
           # by the keystore_properties style (which already loaded its values from
           # the keystore.properties file written in the previous step).
@@ -1749,6 +1857,19 @@ jobs:
       # Set SLACK_WEBHOOK_URL from repository dispatch payload or secrets
       SLACK_WEBHOOK_URL: ${{ github.event.client_payload.secrets.SLACK_WEBHOOK_URL || secrets.SLACK_WEBHOOK_URL || '' }}
     steps:
+      # CRITICAL: must be the first step in every job that may receive
+      # client_payload secrets. repository_dispatch payload values aren't
+      # auto-masked by GitHub (only repo-level `secrets.X` values are). We
+      # read each value from the event JSON file and register it as a mask
+      # so it shows as *** in subsequent log output. Reading from the file
+      # avoids ${{ }} substitution rendering values into the displayed
+      # shell command line itself, which would leak before masking applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
       # CRITICAL: Ensure public repo action is available
       - name: Checkout Public Repository (for actions)
         uses: actions/checkout@v4

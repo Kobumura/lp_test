@@ -1626,7 +1626,8 @@ jobs:
         run: |
           # Get values from build.gradle for reference only
           FILE_VERSION_NAME=$(grep versionName build.gradle | sed -E 's/.*"(.*)"/\1/')
-          FILE_VERSION_CODE=$(grep "versionCode project.hasProperty" build.gradle | sed -E 's/.*: ([0-9]+).*/\1/')
+          # Handles both "versionCode 1" and the RN-template "... : 1" form
+          FILE_VERSION_CODE=$(grep -E "^[[:space:]]*versionCode" build.gradle | head -1 | grep -oE "[0-9]+" | tail -1)
           
           echo "📋 Android Version Management (Store-First):"
           echo "  File Version (ignored): $FILE_VERSION_NAME (build $FILE_VERSION_CODE)"
@@ -1736,13 +1737,15 @@ jobs:
           # Update version name
           sed -i "s/versionName \"$CURRENT_VERSION_NAME\"/versionName \"$NEXT_VERSION_NAME\"/" build.gradle
           
-          # Update version code  
-          sed -i "s/: $CURRENT_VERSION_CODE/: $NEXT_VERSION_CODE/" build.gradle
-          
+          # Update version code (agnostic to build.gradle style — replaces the
+          # trailing integer on the versionCode line for both "versionCode 1" and
+          # the RN-template "... : 1" form)
+          sed -i -E "/^[[:space:]]*versionCode/ s/[0-9]+([^0-9]*)$/$NEXT_VERSION_CODE\1/" build.gradle
+
           # Verify the changes
           echo "✅ Updated build.gradle:"
           echo "$(grep versionName build.gradle)"
-          echo "$(grep "versionCode project.hasProperty" build.gradle)"
+          echo "$(grep -E '^[[:space:]]*versionCode' build.gradle)"
 
       # Android signing supports two styles, detected in setup:
       #   gradle_p           — build.gradle reads signing* via project.hasProperty().

@@ -1789,6 +1789,21 @@ jobs:
             echo "Using gradle -P signing style (no keystore.properties needed)"
           fi
 
+      # React Native projects developed primarily on Windows sometimes hardcode
+      # the Windows node.exe path in build.gradle's react {} block:
+      #   nodeExecutableAndArgs = ["C:/Program Files/nodejs/node.exe"]
+      # That path doesn't exist on Linux runners. Replace it with plain "node"
+      # which is on PATH via setup-node. Idempotent — no-op if pattern absent.
+      - name: Patch React Native node path for Linux
+        working-directory: ./private-repo/android/app
+        run: |
+          if grep -q '"C:/Program Files/nodejs/node.exe"' build.gradle 2>/dev/null; then
+            sed -i 's|"C:/Program Files/nodejs/node.exe"|"node"|g' build.gradle
+            echo "Patched: replaced Windows node.exe path with 'node'"
+          else
+            echo "No Windows node.exe path found — nothing to patch"
+          fi
+
       - name: Build Release AAB
         working-directory: ./private-repo/android
         run: |

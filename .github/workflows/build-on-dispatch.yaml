@@ -309,7 +309,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -317,7 +317,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -704,7 +704,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -936,7 +936,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -944,7 +944,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -1214,7 +1214,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -1587,7 +1587,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'true'
         uses: buildjet/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 
@@ -1595,7 +1595,7 @@ jobs:
         if: needs.setup.outputs.use_buildjet == 'false'
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: ${{ needs.setup.outputs.package_manager }}
           cache-dependency-path: './private-repo/${{ needs.setup.outputs.lockfile }}'
 

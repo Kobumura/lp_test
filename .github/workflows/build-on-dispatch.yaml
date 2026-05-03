@@ -1559,6 +1559,11 @@ jobs:
           echo "  Version Source: ${{ needs.google-play-query.outputs.version_source }}"
           echo "  Query Success: ${{ needs.google-play-query.outputs.query_success }}"
 
+      # Check out lp_test (this repo) into the workspace root so the upload
+      # retry script under scripts/ is available on the runner.
+      - name: Checkout Public Repository (for scripts)
+        uses: actions/checkout@v4
+
       - name: Checkout Private Repository
         uses: actions/checkout@v4
         with:
@@ -1804,32 +1809,13 @@ jobs:
             echo "No Windows node.exe path found — nothing to patch"
           fi
 
-      - name: Build Release AAB
-        working-directory: ./private-repo/android
-        run: |
-          # gradlew is often committed without the executable bit (Windows-developed
-          # repos don't track Unix file modes). Make it executable before invoking.
-          chmod +x gradlew
-
-          # -P flags are read by the gradle_p signing style and ignored harmlessly
-          # by the keystore_properties style (which already loaded its values from
-          # the keystore.properties file written in the previous step).
-          # -PlittleVersionCode is LittleTalks-specific; harmless to pass to other
-          # repos (gradle ignores unknown -P props).
-          ./gradlew bundleRelease \
-            -PsigningKeystorePassword="$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -PsigningKeyAlias="$ANDROID_RELEASE_KEY_ALIAS" \
-            -PsigningKeyPassword="$ANDROID_RELEASE_KEY_PASSWORD" \
-            -PlittleVersionCode=${{ env.NEXT_VERSION_CODE }} \
-            --stacktrace
-
       - name: Prepare Google Play Credentials for Upload
         env:
           GOOGLE_PLAY_JSON_B64: ${{ github.event.client_payload.secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_B64 || '' }}
           GOOGLE_PLAY_JSON_REPO: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
           echo "🔑 Setting up Google Play credentials for upload..."
-          
+
           if [ -n "$GOOGLE_PLAY_JSON_B64" ]; then
             echo "$GOOGLE_PLAY_JSON_B64" | base64 -d > /tmp/google-play-key.json
           elif [ -n "$GOOGLE_PLAY_JSON_REPO" ]; then
@@ -1838,17 +1824,26 @@ jobs:
             echo "❌ No Google Play service account JSON available"
             exit 1
           fi
-          
+
           echo "✅ Google Play credentials ready for upload"
 
-      - name: Upload to Google Play
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJson: /tmp/google-play-key.json
-          packageName: ${{ needs.setup.outputs.android_package_name }}
-          releaseFiles: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ needs.setup.outputs.track }}
-          status: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+      # Build a signed AAB and upload to Play. On versionCode collision (Play
+      # permanently retires every code that's been ingested, even from deleted
+      # builds), bumps versionCode by 1, rebuilds, and retries — up to 10 times.
+      # Replaces r0adkll/upload-google-play because that action is single-shot.
+      - name: Build & upload AAB (with collision retry)
+        env:
+          PACKAGE_NAME: ${{ needs.setup.outputs.android_package_name }}
+          GRADLE_DIR: ./private-repo/android
+          AAB_PATH: ./private-repo/android/app/build/outputs/bundle/release/app-release.aab
+          SA_JSON: /tmp/google-play-key.json
+          TRACK: ${{ needs.setup.outputs.track }}
+          STATUS: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
+          INITIAL_VERSION_CODE: ${{ env.NEXT_VERSION_CODE }}
+          MAX_ATTEMPTS: '10'
+        run: |
+          chmod +x scripts/upload-android-with-retry.sh
+          scripts/upload-android-with-retry.sh
 
       - name: Set Android Build Status
         id: android-build-status

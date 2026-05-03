@@ -73,6 +73,13 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
         echo "uploaded_version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
         echo "attempt_count=$ATTEMPT" >> "$GITHUB_OUTPUT"
       fi
+      # Propagate the *actually uploaded* versionCode to the job env so
+      # downstream steps (Slack, git tag, build summary) see the post-retry
+      # value, not the initial pre-retry one. Append-mode is safe: GitHub
+      # uses the last-written value of an env var.
+      if [ -n "${GITHUB_ENV:-}" ]; then
+        echo "NEXT_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+      fi
       exit 0
       ;;
     42)

@@ -600,7 +600,7 @@ jobs:
               print(f"📦 Highest BUILD overall: {highest_build_overall}")
 
               # Use the highest semantic version, but ensure build number is always higher
-              safe_build = max(highest_build_overall + 10, highest_version_build + 10)
+              safe_build = max(highest_build_overall + 1, highest_version_build + 1)
 
               print(f"HIGHEST_VERSION={highest_version_obj['full']}")
               print(f"HIGHEST_BUILD={safe_build}")
@@ -1710,9 +1710,6 @@ jobs:
             else
               # Fallback to file + increment
               NEXT_BUILD=$((FILE_VERSION_CODE + 1))
-              if [ "$NEXT_BUILD" -lt 100 ]; then
-                NEXT_BUILD=100
-              fi
               echo "  Build number: $NEXT_BUILD (fallback from file)"
             fi
           fi

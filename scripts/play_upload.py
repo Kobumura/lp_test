@@ -10,10 +10,29 @@ Exit codes:
 import argparse
 import sys
 
+import httplib2
+import google_auth_httplib2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
+
+
+# Per-request HTTP read timeout, in seconds. Google's response to the FINAL
+# upload chunk includes server-side processing of the AAB (virus scan,
+# signature verification, manifest parse) — for a ~90 MB AAB on a busy day
+# this can take 60-120s, which the default httplib2 60s read window blows.
+# Also covers slow responses on tracks().update() and edits().commit().
+# 300s gives a comfortable cushion without making genuine network outages
+# block the CI runner indefinitely.
+HTTP_TIMEOUT_S = 300
+
+# Per-call retry budget for transient HTTP failures (503, connection reset,
+# read timeout). googleapiclient's next_chunk() and execute() both honor
+# this. 3 attempts has been Google's documented recommendation; matches
+# the implicit retry-on-collision loop one layer up in
+# scripts/upload-android-with-retry.sh.
+NUM_RETRIES = 3
 
 
 def main() -> int:
@@ -33,10 +52,21 @@ def main() -> int:
         args.service_account,
         scopes=["https://www.googleapis.com/auth/androidpublisher"],
     )
-    svc = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
+    # Build the service with an explicit long-timeout HTTP transport. The
+    # default Http() uses 60s, which is the *socket read* timeout — that
+    # bites on the final upload chunk where Google's response carries
+    # server-side AAB processing time, and on the eventual commit() call.
+    http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_S)
+    )
+    svc = build("androidpublisher", "v3", http=http, cache_discovery=False)
 
     try:
-        edit = svc.edits().insert(packageName=args.package, body={}).execute()
+        edit = (
+            svc.edits()
+            .insert(packageName=args.package, body={})
+            .execute(num_retries=NUM_RETRIES)
+        )
         edit_id = edit["id"]
         print(f"Created edit {edit_id}", file=sys.stderr)
 
@@ -70,7 +100,9 @@ def main() -> int:
         response = None
         last_pct = -1
         while response is None:
-            status, response = upload_req.next_chunk()
+            # num_retries covers transient 5xx / connection resets so a
+            # single flaky chunk doesn't fail the whole upload.
+            status, response = upload_req.next_chunk(num_retries=NUM_RETRIES)
             if status is not None:
                 pct = int(status.progress() * 100)
                 if pct != last_pct:
@@ -89,10 +121,12 @@ def main() -> int:
                     {"versionCodes": [str(version_code)], "status": args.status}
                 ]
             },
-        ).execute()
+        ).execute(num_retries=NUM_RETRIES)
         print(f"Assigned to track {args.track} as {args.status}", file=sys.stderr)
 
-        svc.edits().commit(packageName=args.package, editId=edit_id).execute()
+        svc.edits().commit(
+            packageName=args.package, editId=edit_id
+        ).execute(num_retries=NUM_RETRIES)
         print(
             f"Committed — versionCode {version_code} live on track {args.track}",
             file=sys.stderr,

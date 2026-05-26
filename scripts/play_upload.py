@@ -8,24 +8,29 @@ Exit codes:
   1  — any other error
 """
 import argparse
+import socket
 import sys
+import traceback
 
-import httplib2
-import google_auth_httplib2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 
-# Per-request HTTP read timeout, in seconds. Google's response to the FINAL
-# upload chunk includes server-side processing of the AAB (virus scan,
-# signature verification, manifest parse) — for a ~90 MB AAB on a busy day
-# this can take 60-120s, which the default httplib2 60s read window blows.
-# Also covers slow responses on tracks().update() and edits().commit().
-# 300s gives a comfortable cushion without making genuine network outages
-# block the CI runner indefinitely.
+# Socket-level read timeout in seconds. Google's response to the FINAL upload
+# chunk includes server-side processing (virus scan, signature verify,
+# manifest parse) — for a ~90 MB AAB on a busy day this takes 60-120s, which
+# blows the default Python socket 60s read window. We extend the SOCKET
+# default rather than overriding googleapiclient's Http transport: the
+# earlier `AuthorizedHttp(creds, http=httplib2.Http(timeout=300))` approach
+# broke httplib2's redirect handling for the resumable-upload protocol
+# ("Redirected but the response is missing a Location: header") because
+# Google's `build(credentials=...)` constructs a tuned transport that we
+# replaced. Setting the socket default leaves Google's transport intact and
+# still extends every socket read used underneath it.
 HTTP_TIMEOUT_S = 300
+socket.setdefaulttimeout(HTTP_TIMEOUT_S)
 
 # Per-call retry budget for transient HTTP failures (503, connection reset,
 # read timeout). googleapiclient's next_chunk() and execute() both honor
@@ -52,14 +57,11 @@ def main() -> int:
         args.service_account,
         scopes=["https://www.googleapis.com/auth/androidpublisher"],
     )
-    # Build the service with an explicit long-timeout HTTP transport. The
-    # default Http() uses 60s, which is the *socket read* timeout — that
-    # bites on the final upload chunk where Google's response carries
-    # server-side AAB processing time, and on the eventual commit() call.
-    http = google_auth_httplib2.AuthorizedHttp(
-        creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_S)
-    )
-    svc = build("androidpublisher", "v3", http=http, cache_discovery=False)
+    # Use Google's default-constructed authorized transport. Combined with
+    # the module-level socket.setdefaulttimeout() above, this gives the
+    # transport a 300s socket read window WITHOUT breaking its redirect /
+    # resumable-upload behavior (which a custom Http() override does).
+    svc = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
 
     try:
         edit = (
@@ -137,11 +139,15 @@ def main() -> int:
         body = e.content.decode("utf-8", errors="replace") if e.content else ""
         print(f"HTTP {e.resp.status}", file=sys.stderr)
         print(body, file=sys.stderr)
+        # Full traceback for any non-trivial failure so the CI log is
+        # self-sufficient for root-causing without re-running.
+        traceback.print_exc(file=sys.stderr)
         if "has already been used" in body:
             return 42
         return 1
     except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
+        print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
 

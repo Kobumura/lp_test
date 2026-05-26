@@ -30,16 +30,7 @@ echo "  max attempts     = $MAX_ATTEMPTS"
 echo "  track / status   = $TRACK / $STATUS"
 
 # Install Python deps once. --user keeps it out of system site-packages.
-# google-auth-httplib2 is a transitive dep of google-api-python-client but
-# pinning it explicitly so play_upload.py's `import google_auth_httplib2`
-# (used to attach a long-timeout httplib2 transport to the service) is
-# guaranteed to resolve. httplib2 itself is also a transitive dep but
-# pinned for the same reason.
-python3 -m pip install --quiet --user \
-    google-api-python-client \
-    google-auth \
-    google-auth-httplib2 \
-    httplib2
+python3 -m pip install --quiet --user google-api-python-client google-auth
 
 ATTEMPT=1
 while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do

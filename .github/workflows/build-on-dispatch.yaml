@@ -1821,6 +1821,13 @@ jobs:
           GIT_SHA_SHORT: ${{ needs.setup.outputs.target_sha }}
           NEXT_VERSION_NAME: ${{ env.NEXT_VERSION_NAME }}
           NEXT_VERSION_CODE: ${{ env.NEXT_VERSION_CODE }}
+          # Target repo can pass `release_stage` in the dispatch payload
+          # to bake an environment marker into the bundle (e.g. "staging"
+          # so app-side code can enable QA-only paths that should not run
+          # on a production-track build). Empty string falls back to
+          # "production" so existing target repos that don't set this
+          # field behave as before.
+          RELEASE_STAGE: ${{ github.event.client_payload.release_stage || 'production' }}
         run: |
           BUILD_INFO_FILE="src/generated/buildInfo.ts"
           if [ ! -f "$BUILD_INFO_FILE" ]; then
@@ -1841,9 +1848,10 @@ jobs:
             buildTime: '${BUILD_TIME}',
             versionName: '${NEXT_VERSION_NAME}',
             versionCode: '${NEXT_VERSION_CODE}',
+            releaseStage: '${RELEASE_STAGE}',
           } as const;
           EOF
-          echo "✅ Wrote $BUILD_INFO_FILE:"
+          echo "✅ Wrote $BUILD_INFO_FILE (releaseStage=$RELEASE_STAGE):"
           cat "$BUILD_INFO_FILE"
 
       - name: Prepare Google Play Credentials for Upload

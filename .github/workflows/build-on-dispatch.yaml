@@ -38,6 +38,7 @@ jobs:
       run_ui_tests: ${{ steps.config.outputs.run_ui_tests }}
       run_unit_tests: ${{ steps.config.outputs.run_unit_tests }}
       run_build: ${{ steps.config.outputs.run_build }}
+      ci_only: ${{ steps.config.outputs.ci_only }}
       track: ${{ steps.config.outputs.track }}
       fail_fast: ${{ steps.config.outputs.fail_fast }}
       ios_runner: ${{ steps.config.outputs.ios_runner }}
@@ -93,6 +94,10 @@ jobs:
             RUN_UI_TESTS="${{ github.event.client_payload.build_config.run_ui_tests || 'true' }}"
             RUN_UNIT_TESTS="${{ github.event.client_payload.build_config.run_unit_tests || 'true' }}"
             RUN_BUILD="${{ github.event.client_payload.build_config.run_build || 'true' }}"
+            # CI-only mode: a test-only dispatch (per-PR CI from a target repo).
+            # When true we run tests but SKIP every build-pipeline side effect —
+            # store-version query, native build, and the version-bump commit-back.
+            CI_ONLY="${{ github.event.client_payload.build_config.ci_only || 'false' }}"
             TRACK="${{ github.event.client_payload.build_config.track || 'internal' }}"
             FAIL_FAST="${{ github.event.client_payload.build_config.fail_fast || 'true' }}"
             DEV_MODE="${{ github.event.client_payload.build_config.dev_mode || 'true' }}"
@@ -116,6 +121,7 @@ jobs:
             RUN_UI_TESTS="true"
             RUN_UNIT_TESTS="true"
             RUN_BUILD="true"
+            CI_ONLY="false"
             TRACK="internal"
             FAIL_FAST="true"
             DEV_MODE="${{ inputs.dev_mode || 'true' }}"
@@ -139,7 +145,19 @@ jobs:
             RUN_UI_TESTS="false"
             RUN_UNIT_TESTS="false"
           fi
-          
+
+          # 🧪 CI-ONLY MODE PROCESSING
+          # A test-only dispatch (e.g. per-PR CI from a target repo). Tests run,
+          # but there is NO build and NO store/commit side effect. Force
+          # RUN_BUILD=false so a stray run_build:true in the payload can't
+          # accidentally kick off a native build + Play upload for a CI check.
+          # (The store-query / build / commit-and-notify jobs are also gated on
+          # ci_only != 'true' at the job level — belt and suspenders.)
+          if [ "$CI_ONLY" = "true" ]; then
+            echo "🧪🧪🧪 CI-ONLY MODE — tests only, no build / no store side effects 🧪🧪🧪"
+            RUN_BUILD="false"
+          fi
+
           echo "📋 Input Configuration:"
           echo "  Target Repo: $TARGET_REPO"
           echo "  Target Ref: $TARGET_REF"
@@ -208,6 +226,7 @@ jobs:
           echo "run_ui_tests=$RUN_UI_TESTS" >> $GITHUB_OUTPUT
           echo "run_unit_tests=$RUN_UNIT_TESTS" >> $GITHUB_OUTPUT
           echo "run_build=$RUN_BUILD" >> $GITHUB_OUTPUT
+          echo "ci_only=$CI_ONLY" >> $GITHUB_OUTPUT
           echo "track=$TRACK" >> $GITHUB_OUTPUT
           echo "fail_fast=$FAIL_FAST" >> $GITHUB_OUTPUT
           echo "ios_runner=$IOS_RUNNER" >> $GITHUB_OUTPUT
@@ -336,7 +355,7 @@ jobs:
   app-store-query:
     runs-on: macos-15
     needs: setup
-    if: needs.setup.outputs.build_ios == 'true'
+    if: needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.ci_only != 'true'
     outputs:
       latest_build_number: ${{ steps.query.outputs.build_number }}
       query_success: ${{ steps.query.outputs.success }}
@@ -468,7 +487,7 @@ jobs:
   google-play-query:
     runs-on: ubuntu-latest
     needs: setup
-    if: needs.setup.outputs.build_android == 'true'
+    if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.ci_only != 'true'
     outputs:
       latest_version_name: ${{ steps.query.outputs.version_name }}
       latest_build_number: ${{ steps.query.outputs.build_number }}
@@ -1154,7 +1173,7 @@ jobs:
   ios-build:
     runs-on: ${{ needs.setup.outputs.ios_runner }}
     needs: [setup, ios-ui-tests, app-store-query]
-    if: always() && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
+    if: always() && needs.setup.outputs.ci_only != 'true' && needs.setup.outputs.build_ios == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.ios-ui-tests.outputs.ui_tests_passed == 'true')
     outputs:
       version_name: ${{ env.NEXT_VERSION_NAME }}
       version_code: ${{ env.NEXT_VERSION_CODE }}
@@ -1514,7 +1533,7 @@ jobs:
     runs-on: ${{ needs.setup.outputs.android_runner }}
     timeout-minutes: 30
     needs: [setup, android-ui-tests, google-play-query]
-    if: always() && needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.android-ui-tests.outputs.ui_tests_passed == 'true')
+    if: always() && needs.setup.outputs.ci_only != 'true' && needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_build == 'true' && (needs.setup.outputs.dev_mode == 'true' || needs.android-ui-tests.outputs.ui_tests_passed == 'true')
     outputs:
       version_name: ${{ env.NEXT_VERSION_NAME }}
       version_code: ${{ env.NEXT_VERSION_CODE }}
@@ -1907,7 +1926,9 @@ jobs:
   commit-and-notify:
     runs-on: ubuntu-latest
     needs: [setup, unit-tests, ios-ui-tests, android-ui-tests, google-play-query, app-store-query, ios-build, android-build]
-    if: always()
+    # ci_only: a test-only CI dispatch never commits version bumps back to the
+    # target repo or posts a build notification — it is not a build.
+    if: always() && needs.setup.outputs.ci_only != 'true'
     env:
       # Set SLACK_WEBHOOK_URL from repository dispatch payload or secrets
       SLACK_WEBHOOK_URL: ${{ github.event.client_payload.secrets.SLACK_WEBHOOK_URL || secrets.SLACK_WEBHOOK_URL || '' }}

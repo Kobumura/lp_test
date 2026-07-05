@@ -1145,13 +1145,12 @@ jobs:
           working-directory: ./private-repo
           script: |
             # Target-defined Maestro target (setup default = LittleTalks'
-            # .maestro/signup-flow.yml). SaveYour passes .maestro/smoke/smoke-test.yaml.
-            # Read straight from the dispatch payload first — the setup job output
-            # for this one field intermittently arrives empty inside this action's
-            # script context, so payload is the reliable source; setup output +
-            # default are fallbacks (e.g. workflow_dispatch has no client_payload).
-            TEST_TARGET="${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
-            if [ -z "$TEST_TARGET" ]; then echo "❌ no Maestro flow resolved"; exit 1; fi
+            # .maestro/signup-flow.yml; SaveYour passes .maestro/smoke/smoke-test.yaml.
+            # IMPORTANT: android-emulator-runner runs this script ONE LINE PER
+            # SEPARATE `sh -c`, so shell variables do NOT persist between lines.
+            # Everything below therefore uses GitHub ${{ }} render-time values
+            # (env / needs / event contexts) inlined directly — never a shell var
+            # carried across lines.
             echo "📱 Installing APK on emulator: ${{ env.DEBUG_APK_PATH }}"
             adb install "${{ env.DEBUG_APK_PATH }}"
             # RN debug builds load JS from Metro on the host; make host:8081 reachable
@@ -1160,11 +1159,10 @@ jobs:
             # Optional warm-up launch. Non-fatal: the MainActivity class path varies
             # per target repo (SaveYour's is com.saveyour.MainActivity, not
             # <pkg>.MainActivity), and Maestro's own launchApp does the real launch.
-            echo "🚀 Warm-up launch (best-effort)..."
             adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity || echo "warm-up am start skipped (Maestro will launch the app)"
             sleep 3
-            echo "🧪 Running Maestro UI tests: $TEST_TARGET"
-            maestro test "$TEST_TARGET"
+            echo "🧪 Running Maestro UI tests: ${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
+            maestro test "${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
             echo "✅ Android UI tests completed successfully"
 
       - name: Set UI Test Results

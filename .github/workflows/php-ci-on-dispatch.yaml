@@ -1,0 +1,214 @@
+name: PHP CI (dispatch executor)
+
+# Public executor for the "private triggers, public executes" pattern applied to
+# PHP projects. A tenant's PRIVATE repo fires a `repository_dispatch` (event type
+# `php-ci`) carrying its repo/ref/sha and a masked token; this workflow runs the
+# tenant's CI HERE on the public repo (free Actions minutes) and reports a commit
+# status back to the tenant's PR, so branch protection can still gate on it.
+#
+# PILOT SCOPE (2026-07): the CI body mirrors SnappShot's suite (tests.yml +
+# e2e-pr.yml) — chosen as the first tenant because it's the most demanding
+# (mutation/pcov, Playwright e2e, visual regression) and needs no secrets beyond
+# a clone/status token. Phase 2 makes the steps config-driven from the payload so
+# any tenant can use it. Design notes: lp_test/.claude/notes/platform-context.md
+#
+# Manual test without the private trigger:
+#   Actions ▸ "PHP CI (dispatch executor)" ▸ Run workflow, supply target_repo/sha.
+
+on:
+  repository_dispatch:
+    types: [php-ci]
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'owner/repo of the private source to check out (e.g. Kobumura/snappshot)'
+        required: true
+      ref:
+        description: 'git ref/branch to report against'
+        required: false
+        default: 'main'
+      sha:
+        description: 'commit SHA to check out and report status on'
+        required: true
+
+concurrency:
+  # One in-flight run per (repo, sha); a newer push to the same PR head supersedes.
+  group: php-ci-${{ github.event.client_payload.target_repo || github.event.inputs.target_repo }}-${{ github.event.client_payload.sha || github.event.inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  php-ci:
+    runs-on: ubuntu-latest
+    name: PHP CI (SnappShot pilot)
+
+    env:
+      # Tenant coordinates — from the dispatch payload, or manual-run inputs.
+      TARGET_REPO: ${{ github.event.client_payload.target_repo || github.event.inputs.target_repo }}
+      TARGET_REF:  ${{ github.event.client_payload.ref || github.event.inputs.ref }}
+      TARGET_SHA:  ${{ github.event.client_payload.sha || github.event.inputs.sha }}
+      # SnappShot app/test env (pilot-specific; Phase 2 moves these into payload ci_config).
+      SS_ENV: test
+      DB_TEST_HOST: 127.0.0.1
+      DB_TEST_NAME: snappshot_test
+      DB_TEST_USER: root
+      DB_TEST_PASS: root
+      PHP_CLI_SERVER_WORKERS: 4
+      E2E_BASE_URL: http://127.0.0.1:8000
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: snappshot_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      # repository_dispatch payload values are NOT auto-masked by GitHub (only
+      # repo-level `secrets.*` are). Mask every payload secret before any step can
+      # echo it. Reads the event file, not `${{ }}`, so nothing renders into the
+      # command line before the mask applies.
+      - name: Mask payload secrets
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            jq -r '.client_payload.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$GITHUB_EVENT_PATH" \
+              | while IFS= read -r v; do echo "::add-mask::$v"; done
+          fi
+
+      - name: Validate inputs
+        run: |
+          if [ -z "$TARGET_REPO" ] || [ -z "$TARGET_SHA" ]; then
+            echo "::error::target_repo and sha are required"; exit 1
+          fi
+          echo "Running CI for $TARGET_REPO @ $TARGET_SHA (ref: ${TARGET_REF:-n/a})"
+
+      - name: Report pending status to tenant
+        env:
+          STATUS_TOKEN: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+        run: |
+          if [ -z "$STATUS_TOKEN" ]; then echo "No status token; skipping status-back (manual run?)."; exit 0; fi
+          curl -sS -X POST \
+            -H "Authorization: token $STATUS_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"pending\",\"context\":\"littlepipes/ci\",\"description\":\"Running on LittlePipes public runner\",\"target_url\":\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            -o /dev/null -w "pending status: HTTP %{http_code}\n"
+
+      - name: Checkout tenant source
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          ref: ${{ env.TARGET_SHA }}
+          token: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo, pdo_mysql, mbstring, json
+          coverage: none
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # ---- Static gates (no DB; fail fast). SnappShot-specific for the pilot. ----
+      - name: Code style (PHP-CS-Fixer)
+        run: composer lint
+
+      - name: Template separation (JS/CSS out of templates)
+        run: php scripts/lint/template_separation.php
+
+      - name: Static analysis (PHPStan)
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      # ---- DB-backed suite ----
+      - name: Wait for MariaDB
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -proot --silent; then echo "MariaDB up"; break; fi
+            echo "waiting for mariadb ($i)"; sleep 2
+          done
+
+      - name: Relax CHECK constraints for legacy-migration replay
+        run: mysql -h 127.0.0.1 -uroot -proot -e "SET GLOBAL check_constraint_checks=OFF;"
+
+      - name: Run migrations (builds full schema on snappshot_test)
+        run: php scripts/migrations/run_migrations.php
+
+      - name: Seed fixture matrix
+        run: php scripts/seed/seed_test_fixtures.php --force
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit --colors=never
+
+      # ---- E2E: boot the app in-runner, Playwright smoke + visual gate ----
+      - name: Boot the app (php -S, in-CI ephemeral)
+        run: |
+          php -S 127.0.0.1:8000 -t "$GITHUB_WORKSPACE" > "$GITHUB_WORKSPACE/php-server.log" 2>&1 &
+          echo "PHP_SERVER_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8000/admin/" || true)
+            if [ "$code" != "000" ]; then echo "app responding (HTTP $code)"; break; fi
+            echo "waiting for app ($i)"; sleep 1
+          done
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run E2E smoke against the in-CI app
+        working-directory: e2e
+        run: npx playwright test --project=chromium --grep "@smoke"
+
+      - name: Run visual regression (gated until baselines exist)
+        working-directory: e2e
+        env:
+          E2E_VISUAL: '1'
+        run: |
+          if compgen -G "tests/visual*/**/*.png" > /dev/null || compgen -G "tests/visual*/*-snapshots/*.png" > /dev/null; then
+            npx playwright test --project=visual --project=visual-authed
+          else
+            echo "No visual baselines committed yet — skipping the visual gate."
+          fi
+
+      - name: Dump app log on failure
+        if: failure()
+        run: cat "$GITHUB_WORKSPACE/php-server.log" || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+
+      # ---- Report the final verdict back to the tenant's PR commit ----
+      - name: Report final status to tenant
+        if: always()
+        env:
+          STATUS_TOKEN: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
+        run: |
+          if [ -z "$STATUS_TOKEN" ]; then echo "No status token; skipping status-back."; exit 0; fi
+          STATE="success"; DESC="All checks passed on LittlePipes"
+          if [ "${{ job.status }}" != "success" ]; then STATE="failure"; DESC="CI failed on LittlePipes (${{ job.status }})"; fi
+          curl -sS -X POST \
+            -H "Authorization: token $STATUS_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"$STATE\",\"context\":\"littlepipes/ci\",\"description\":\"$DESC\",\"target_url\":\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            -o /dev/null -w "final status ($STATE): HTTP %{http_code}\n"

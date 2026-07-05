@@ -1147,10 +1147,12 @@ jobs:
             # Target-defined Maestro target (setup default = LittleTalks'
             # .maestro/signup-flow.yml; SaveYour passes .maestro/smoke/smoke-test.yaml.
             # IMPORTANT: android-emulator-runner runs this script ONE LINE PER
-            # SEPARATE `sh -c`, so shell variables do NOT persist between lines.
-            # Everything below therefore uses GitHub ${{ }} render-time values
-            # (env / needs / event contexts) inlined directly — never a shell var
-            # carried across lines.
+            # SEPARATE 'sh -c', so shell variables do NOT persist between lines.
+            # Everything below therefore inlines GitHub render-time expression
+            # values (env / needs / event contexts) directly, never a shell var
+            # carried across lines. (Do NOT write a literal dollar-brace-brace
+            # expression in these comments — the script block is not a YAML
+            # comment, and an empty expression is an invalid-workflow error.)
             echo "📱 Installing APK on emulator: ${{ env.DEBUG_APK_PATH }}"
             adb install "${{ env.DEBUG_APK_PATH }}"
             # RN debug builds load JS from Metro on the host; make host:8081 reachable

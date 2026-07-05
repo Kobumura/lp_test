@@ -93,12 +93,18 @@ jobs:
           STATUS_TOKEN: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN || secrets.TARGET_REPO_TOKEN }}
         run: |
           if [ -z "$STATUS_TOKEN" ]; then echo "No status token; skipping status-back (manual run?)."; exit 0; fi
-          curl -sS -X POST \
+          code=$(curl -sS -X POST \
             -H "Authorization: token $STATUS_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA" \
             -d "{\"state\":\"pending\",\"context\":\"littlepipes/ci\",\"description\":\"Running on LittlePipes public runner\",\"target_url\":\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
-            -o /dev/null -w "pending status: HTTP %{http_code}\n"
+            -o /dev/null -w "%{http_code}")
+          echo "pending status: HTTP $code"
+          # POST /statuses returns 201 on success. Surface anything else loudly
+          # (403 = token missing 'Commit statuses: write' on the target repo).
+          if [ "$code" != "201" ]; then
+            echo "::error::status-back rejected (HTTP $code) — does the target token have 'Commit statuses: write' on $TARGET_REPO?"
+          fi
 
       - name: Checkout tenant source
         uses: actions/checkout@v5
@@ -206,9 +212,13 @@ jobs:
           if [ -z "$STATUS_TOKEN" ]; then echo "No status token; skipping status-back."; exit 0; fi
           STATE="success"; DESC="All checks passed on LittlePipes"
           if [ "${{ job.status }}" != "success" ]; then STATE="failure"; DESC="CI failed on LittlePipes (${{ job.status }})"; fi
-          curl -sS -X POST \
+          code=$(curl -sS -X POST \
             -H "Authorization: token $STATUS_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA" \
             -d "{\"state\":\"$STATE\",\"context\":\"littlepipes/ci\",\"description\":\"$DESC\",\"target_url\":\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
-            -o /dev/null -w "final status ($STATE): HTTP %{http_code}\n"
+            -o /dev/null -w "%{http_code}")
+          echo "final status ($STATE): HTTP $code"
+          if [ "$code" != "201" ]; then
+            echo "::error::status-back rejected (HTTP $code) — does the target token have 'Commit statuses: write' on $TARGET_REPO?"
+          fi

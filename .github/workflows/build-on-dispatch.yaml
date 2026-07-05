@@ -592,49 +592,80 @@ jobs:
           # Read track data from stdin
           track_data = sys.stdin.read()
 
-          # Extract track information
-          tracks = re.findall(r'Track: (\w+)\nReleases:.*?Name: ([^\n]+).*?Version codes:\s*\n\s*- (\d+)', track_data, re.DOTALL)
+          # A single track can carry MORE THAN ONE active release at once (e.g.
+          # a staged rollout alongside a halted one). The old single re.findall
+          # below used a non-greedy `.*?` that stopped at the FIRST release in
+          # each track and silently ignored the rest -- so a release with a
+          # higher build code but a lower semver name became invisible and the
+          # build ceiling regressed (picked build 2 while build 23 was live,
+          # which Play then rejects as not-upgradeable). We must see every
+          # release in every track. Split the concatenated CLI output into
+          # per-track sections, then walk all releases within each section.
+          track_sections = re.split(r'(?=Track:\s*\w+)', track_data)
 
           versions = {}
           highest_version_obj = None
           highest_version_track = None
-          highest_version_build = 0
           highest_build_overall = 0
 
           print("📊 Found versions in tracks:")
           print("-" * 50)
 
-          for track, version_name, build_code in tracks:
-              build_num = int(build_code)
-              parsed_version = parse_version(version_name)
+          for section in track_sections:
+              tm = re.match(r'Track:\s*(\w+)', section.strip())
+              if not tm:
+                  continue
+              track = tm.group(1)
 
-              if build_num > highest_build_overall:
-                  highest_build_overall = build_num
+              # finditer (not findall) so EVERY release in this track is seen,
+              # not just the first. A release may also list multiple version
+              # codes (multi-ABI bundles); take the max within the release.
+              for rm in re.finditer(
+                  r'Name:\s*([^\n]+?)\s*\n.*?Version codes:\s*\n((?:[ \t]*-\s*\d+\s*\n?)+)',
+                  section, re.DOTALL
+              ):
+                  version_name = rm.group(1).strip()
+                  codes = [int(c) for c in re.findall(r'-\s*(\d+)', rm.group(2))]
+                  if not codes:
+                      continue
+                  build_num = max(codes)
 
-              if parsed_version:
-                  versions[track] = {
-                      'version': parsed_version['full'],
-                      'build': build_num,
-                      'raw_name': version_name
-                  }
+                  # Build ceiling: the highest version code across ALL releases
+                  # in ALL tracks. Build codes are the upgrade constraint Play
+                  # enforces; this is the number the next build must clear.
+                  if build_num > highest_build_overall:
+                      highest_build_overall = build_num
 
-                  print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
+                  parsed_version = parse_version(version_name)
+                  if parsed_version:
+                      # Log every release so regressions are visible at a glance.
+                      versions.setdefault(track, []).append({
+                          'version': parsed_version['full'],
+                          'build': build_num,
+                          'raw_name': version_name
+                      })
+                      print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
 
-                  # Check if this is the highest VERSION (not build)
-                  if compare_versions(parsed_version, highest_version_obj):
-                      highest_version_obj = parsed_version
-                      highest_version_track = track
-                      highest_version_build = build_num
+                      # Highest semantic VERSION name (separate from build code).
+                      if compare_versions(parsed_version, highest_version_obj):
+                          highest_version_obj = parsed_version
+                          highest_version_track = track
+                  else:
+                      print(f"{track:12} : {version_name:10} (build {build_num}) [unparseable name]")
 
           print("-" * 50)
 
           # Output results
           if highest_version_obj:
-              print(f"\n✅ Highest VERSION: {highest_version_obj['full']} (build {highest_version_build}) from {highest_version_track}")
-              print(f"📦 Highest BUILD overall: {highest_build_overall}")
+              print(f"\n✅ Highest VERSION: {highest_version_obj['full']} from {highest_version_track}")
+              print(f"📦 Highest BUILD code across all releases/tracks: {highest_build_overall}")
 
-              # Use the highest semantic version, but ensure build number is always higher
-              safe_build = max(highest_build_overall + 1, highest_version_build + 1)
+              # Next build must clear the highest existing build code across
+              # every release in every track, regardless of which release owns
+              # the highest semver name. (A Play upload-collision bump+retry
+              # downstream handles the rare race where another upload lands in
+              # between.)
+              safe_build = highest_build_overall + 1
 
               print(f"HIGHEST_VERSION={highest_version_obj['full']}")
               print(f"HIGHEST_BUILD={safe_build}")

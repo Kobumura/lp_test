@@ -1,0 +1,5 @@
+# Claude Code local state & private working notes (never publish to public repo)
+.claude/
+
+# Local-only docs kept out of the public repo
+AGENTS.md

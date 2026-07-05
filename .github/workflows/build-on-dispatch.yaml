@@ -1114,13 +1114,22 @@ jobs:
           echo "🔨 Building Android app..."
           ./gradlew assembleDebug --stacktrace
           echo "✅ Android APK built successfully"
-          
-          # Verify APK exists
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$APK_PATH" ]; then
-            echo "❌ APK not found at expected location: $APK_PATH"
-            exit 1
+
+          # Discover the debug APK rather than assuming a name — target repos
+          # rename their output (e.g. SaveYour -> saveyour-debug.apk) and may
+          # split by ABI. Prefer an x86_64 or universal APK for the x86_64
+          # emulator; never pick an arm-only split (won't install).
+          DIR="app/build/outputs/apk/debug"
+          APK=$(ls "$DIR"/*x86_64*.apk 2>/dev/null | head -1)
+          [ -z "$APK" ] && APK=$(ls "$DIR"/*universal*.apk 2>/dev/null | head -1)
+          [ -z "$APK" ] && APK=$(ls "$DIR"/*.apk 2>/dev/null | grep -viE 'armeabi|arm64|/app-x86-' | head -1)
+          [ -z "$APK" ] && APK=$(ls "$DIR"/*.apk 2>/dev/null | head -1)
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+            echo "❌ No debug APK found under $DIR"; ls -la "$DIR" 2>/dev/null || true; exit 1
           fi
+          echo "✅ Found debug APK: $APK"
+          # Path relative to ./private-repo (the emulator step's working-directory).
+          echo "DEBUG_APK_PATH=android/$APK" >> "$GITHUB_ENV"
 
       - name: Run Android Maestro UI Tests
         uses: reactivecircus/android-emulator-runner@v2
@@ -1138,13 +1147,16 @@ jobs:
             # Target-defined Maestro target (setup default = LittleTalks'
             # .maestro/signup-flow.yml). SaveYour passes .maestro/smoke/smoke-test.yaml.
             TEST_TARGET="${{ needs.setup.outputs.ui_test_flow }}"
-            echo "📱 Installing APK on emulator..."
-            adb install android/app/build/outputs/apk/debug/app-debug.apk
+            echo "📱 Installing APK on emulator: ${{ env.DEBUG_APK_PATH }}"
+            adb install "${{ env.DEBUG_APK_PATH }}"
             # RN debug builds load JS from Metro on the host; make host:8081 reachable
             # from inside the emulator (harmless if the app ships a baked bundle).
             adb reverse tcp:8081 tcp:8081 || true
-            echo "🚀 Launching app..."
-            adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity
+            # Optional warm-up launch. Non-fatal: the MainActivity class path varies
+            # per target repo (SaveYour's is com.saveyour.MainActivity, not
+            # <pkg>.MainActivity), and Maestro's own launchApp does the real launch.
+            echo "🚀 Warm-up launch (best-effort)..."
+            adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity || echo "warm-up am start skipped (Maestro will launch the app)"
             sleep 3
             echo "🧪 Running Maestro UI tests: $TEST_TARGET"
             maestro test "$TEST_TARGET"

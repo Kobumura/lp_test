@@ -1146,7 +1146,12 @@ jobs:
           script: |
             # Target-defined Maestro target (setup default = LittleTalks'
             # .maestro/signup-flow.yml). SaveYour passes .maestro/smoke/smoke-test.yaml.
-            TEST_TARGET="${{ needs.setup.outputs.ui_test_flow }}"
+            # Read straight from the dispatch payload first — the setup job output
+            # for this one field intermittently arrives empty inside this action's
+            # script context, so payload is the reliable source; setup output +
+            # default are fallbacks (e.g. workflow_dispatch has no client_payload).
+            TEST_TARGET="${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
+            if [ -z "$TEST_TARGET" ]; then echo "❌ no Maestro flow resolved"; exit 1; fi
             echo "📱 Installing APK on emulator: ${{ env.DEBUG_APK_PATH }}"
             adb install "${{ env.DEBUG_APK_PATH }}"
             # RN debug builds load JS from Metro on the host; make host:8081 reachable

@@ -26,8 +26,13 @@ const SCHEMA = "littlepipes.dispatch/1";
 const tobool = (v, dflt = false) =>
   v === undefined || v === null || v === "" ? dflt : v === true || v === "true";
 
-// Normalize empty/absent to null so the envelope is uniform.
+// Normalize empty/absent to null so the envelope is uniform. Used for fields the
+// god-file defaults to '' (empty == unset), where null and "" are equivalent.
 const str = (v) => (v === undefined || v === null || v === "" ? null : String(v));
+
+// Mirror the god-file's `X || 'default'` semantics for fields with a NON-empty
+// default: empty/absent both fall through to the default.
+const def = (v, d) => (v === undefined || v === null || v === "" ? d : String(v));
 
 export function normalize(p = {}) {
   const envelope = (intent, blocks = {}) => ({
@@ -57,7 +62,10 @@ export function normalize(p = {}) {
       version: p.version ?? {},
       deploy: p.deploy ?? {},
     });
-    v.schema = p.schema; // preserve the exact declared version (supports N and N-1)
+    // Pass the declared version through unchanged. NOTE: no version validation yet —
+    // only "/1" exists. When a breaking "/2" lands, add an allow-list here and branch
+    // N vs N-1; today an unknown version (e.g. "/999") sails through untouched.
+    v.schema = p.schema;
     return v;
   }
 
@@ -66,26 +74,39 @@ export function normalize(p = {}) {
     const bc = p.build_config;
     const ac = p.app_config ?? {};
     const vc = p.version_config ?? {};
-    // Intent derivation: ci_only wins; else a build is (in current mobile reality) a
-    // ship-to-store, so run_build => deploy. Raw switches are preserved in the blocks
-    // regardless, so behavior is reproducible even if this heuristic is refined later.
-    const intent = tobool(bc.ci_only) ? "ci" : tobool(bc.run_build) ? "deploy" : "ci";
+    // Intent must mirror the god-file's ACTUAL deploy gate: the build+deploy jobs run
+    // on `ci_only != 'true'` (build-on-dispatch.yaml lines 373/505) — `run_build` does
+    // NOT gate them (it's just forced false under ci_only). So the faithful binary is
+    // ci_only ? tests-only : build+deploy. (A `build`-without-deploy intent exists in the
+    // contract but no legacy mobile payload expresses it.)
+    const ciOnly = tobool(bc.ci_only); // god-file default is 'false'
+    const devMode = tobool(bc.dev_mode, true); // god-file default is 'true' (line 110)
+    const intent = ciOnly ? "ci" : "deploy";
     return envelope(intent, {
       ci: {
-        run_unit_tests: tobool(bc.run_unit_tests, true),
-        run_ui_tests: tobool(bc.run_ui_tests, true),
-        test_command: str(bc.test_command),
-        ui_test_flow: str(bc.ui_test_flow),
+        // God-file force-sets BOTH test flags false under dev_mode, regardless of the
+        // payload (lines 150-156); otherwise they default 'true' (lines 96-97). Mirror
+        // that exactly — these flags mean "will actually run," which a router will trust.
+        run_unit_tests: devMode ? false : tobool(bc.run_unit_tests, true),
+        run_ui_tests: devMode ? false : tobool(bc.run_ui_tests, true),
+        test_command: def(bc.test_command, "npm test -- --coverage --watchAll=false"), // line 106
+        ui_test_flow: def(bc.ui_test_flow, ".maestro/signup-flow.yml"), // line 107
         fail_fast: tobool(bc.fail_fast, true),
       },
       build: {
-        platform: bc.platform ?? "both",
-        speed: bc.speed ?? "github",
-        track: str(bc.track),
-        run_build: tobool(bc.run_build),
-        dev_mode: tobool(bc.dev_mode, true),
+        platform: def(bc.platform, "both"),
+        speed: def(bc.speed, "github"),
+        track: def(bc.track, "internal"), // line 108; drives Play draft-vs-completed (line 1973)
+        // God-file: run_build defaults to 'true' (|| 'true'), but is force-disabled
+        // under ci_only (its belt-and-suspenders at line 161). Mirror that exactly.
+        run_build: ciOnly ? false : tobool(bc.run_build, true),
+        dev_mode: devMode,
       },
       app: {
+        // DELIBERATE divergence from the god-file's com.example.app / App / App.xcworkspace
+        // placeholder defaults (lines 112-115): app identity has NO safe default — copying
+        // the placeholder would let a router build/ship the WRONG bundle. null = "caller
+        // must supply"; the router must fail loudly on a missing id, not fall back.
         ios_bundle_id: str(ac.ios_bundle_id),
         ios_scheme: str(ac.ios_scheme),
         ios_workspace: str(ac.ios_workspace),
@@ -93,7 +114,7 @@ export function normalize(p = {}) {
         apple_team_id: str(ac.apple_team_id),
       },
       version: {
-        strategy: vc.strategy ?? "auto",
+        strategy: def(vc.strategy, "auto"),
         custom_version: str(vc.custom_version),
         custom_build_number: str(vc.custom_build_number),
       },
@@ -102,7 +123,7 @@ export function normalize(p = {}) {
           ? {
               kind: "store", // mobile ships to App Store / Play; keys travel masked in secrets
               release_stage: p.release_stage ?? "production", // god-file's default
-              track: str(bc.track),
+              track: def(bc.track, "internal"),
             }
           : {},
     });

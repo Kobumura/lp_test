@@ -63,11 +63,22 @@ jobs:
       # secrets.* are). Mask every secret value before any step can echo it.
       - name: Mask payload secrets
         run: |
-          jq -r '.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$RUNNER_TEMP/payload.json" \
-            | while IFS= read -r v; do echo "::add-mask::$v"; done
+          set -euo pipefail
+          # pipefail is load-bearing: without it a jq failure here would exit 0 and
+          # SILENTLY skip masking, leaking secrets into later logs (the exact silent-
+          # failure class we hit twice on status-back/dispatch this session).
+          # Only mask SCALAR secret values. A nested object/array value would make jq -r
+          # emit bare `{`/`}` fragments, each add-mask'd → useless (and would mask stray
+          # braces across the whole log). Secrets are always scalars (tokens, b64 blobs).
+          secret_vals=$(jq -r '.secrets // {} | to_entries[] | .value | select((type == "string" or type == "number") and (. != ""))' "$RUNNER_TEMP/payload.json")
+          while IFS= read -r v; do
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done <<< "$secret_vals"
 
       - name: Normalize to contract v1
-        run: node scripts/dispatch/normalize.mjs "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/normalized.json"
+        run: |
+          set -euo pipefail
+          node scripts/dispatch/normalize.mjs "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/normalized.json"
 
       - name: Validate required envelope fields
         run: |
@@ -86,6 +97,7 @@ jobs:
 
       - name: Show normalized envelope (secrets redacted)
         run: |
+          set -euo pipefail
           {
             echo '### Normalized dispatch (contract v1)'
             echo '```json'

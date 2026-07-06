@@ -1,0 +1,95 @@
+name: LittlePipes dispatch (v1 entry — strangler)
+
+# The NEW front door for dispatch contract v1 (see .claude/notes/dispatch-contract-v1.md,
+# graduating to public CONTRACT.md). It normalizes ANY accepted payload to the canonical
+# v1 envelope, masks secrets, validates required coordinates, and echoes the result.
+#
+# STRANGLER STATUS (LP-51): routing into build/ci/deploy is the NEXT carving step — this
+# door currently stops after normalize+validate. It listens ONLY on the `littlepipes`
+# event, which no tenant sends yet, so it is INERT in production and cannot double-run
+# against the live god-file (build-on-dispatch.yaml). When a capability is carved out of
+# the god-file, its legacy event type moves HERE and is removed THERE in the same commit —
+# no double-run window.
+#
+# Manual contract test:
+#   Actions ▸ "LittlePipes dispatch (v1 entry — strangler)" ▸ Run workflow ▸ paste a
+#   client_payload JSON (legacy or v1) into raw_payload to see how it normalizes.
+
+on:
+  repository_dispatch:
+    types: [littlepipes]
+  workflow_dispatch:
+    inputs:
+      raw_payload:
+        description: 'client_payload JSON (legacy or v1) to normalize'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lp-dispatch-${{ github.event.client_payload.target_repo || 'manual' }}-${{ github.event.client_payload.sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout LittlePipes (for the normalizer)
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Assemble a bare client_payload (from the dispatch event or the manual input)
+      # into a temp file OUTSIDE the checkout, so nothing can clobber it.
+      - name: Assemble payload
+        env:
+          RAW_INPUT: ${{ github.event.inputs.raw_payload }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RAW_INPUT:-}" ]; then
+            printf '%s' "$RAW_INPUT" | jq 'if .client_payload then .client_payload else . end' > "$RUNNER_TEMP/payload.json"
+          else
+            jq '.client_payload' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/payload.json"
+          fi
+          jq empty "$RUNNER_TEMP/payload.json"   # fail loudly if it isn't valid JSON
+
+      # repository_dispatch payload values are NOT auto-masked by GitHub (only repo-level
+      # secrets.* are). Mask every secret value before any step can echo it.
+      - name: Mask payload secrets
+        run: |
+          jq -r '.secrets // {} | to_entries[] | select(.value != null and .value != "") | .value' "$RUNNER_TEMP/payload.json" \
+            | while IFS= read -r v; do echo "::add-mask::$v"; done
+
+      - name: Normalize to contract v1
+        run: node scripts/dispatch/normalize.mjs "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/normalized.json"
+
+      - name: Validate required envelope fields
+        run: |
+          set -euo pipefail
+          repo=$(jq -r '.target_repo // ""' "$RUNNER_TEMP/normalized.json")
+          sha=$(jq -r '.sha // ""' "$RUNNER_TEMP/normalized.json")
+          intent=$(jq -r '.intent // ""' "$RUNNER_TEMP/normalized.json")
+          if [ -z "$repo" ] || [ -z "$sha" ]; then
+            echo "::error::normalized payload missing target_repo or sha"; exit 1
+          fi
+          case "$intent" in
+            ci|build|deploy) ;;
+            *) echo "::error::unknown intent '$intent'"; exit 1 ;;
+          esac
+          echo "Routed: intent=$intent repo=$repo sha=$sha"
+
+      - name: Show normalized envelope (secrets redacted)
+        run: |
+          {
+            echo '### Normalized dispatch (contract v1)'
+            echo '```json'
+            jq '.secrets |= with_entries(.value = "***")' "$RUNNER_TEMP/normalized.json"
+            echo '```'
+            echo '_Strangler stop-point: build/ci/deploy routing is the next carving step (LP-51)._'
+          } >> "$GITHUB_STEP_SUMMARY"

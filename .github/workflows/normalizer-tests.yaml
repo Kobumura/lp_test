@@ -1,0 +1,31 @@
+name: Normalizer tests
+
+# Gates the dispatch normalizer (scripts/dispatch/) — it is load-bearing for the
+# strangler migration, so it must never silently regress. Runs only when the
+# normalizer or its tests change. Public repo → free minutes.
+
+on:
+  push:
+    paths:
+      - 'scripts/dispatch/**'
+      - '.github/workflows/normalizer-tests.yaml'
+  pull_request:
+    paths:
+      - 'scripts/dispatch/**'
+      - '.github/workflows/normalizer-tests.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run normalizer test suite
+        run: node --test scripts/dispatch/

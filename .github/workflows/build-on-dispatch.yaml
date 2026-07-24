@@ -1195,7 +1195,12 @@ jobs:
             adb shell am start -n ${{ needs.setup.outputs.android_package_name }}/.MainActivity || echo "warm-up am start skipped (Maestro will launch the app)"
             sleep 3
             echo "🧪 Running Maestro UI tests: ${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
-            maestro test "${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
+            # SAV-1012 — a target may template its Maestro appId as an APP_ID
+            # variable (SaveYour does, to share one flow tree across Android + iOS).
+            # Inject -e APP_ID only when the dispatch payload supplies app_id;
+            # targets that hardcode appId (e.g. LittleTalks) send no app_id and run
+            # exactly as before. Value rendered at parse time, never a shell var.
+            maestro test ${{ github.event.client_payload.build_config.app_id && format('-e APP_ID={0} ', github.event.client_payload.build_config.app_id) || '' }}"${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
             echo "✅ Android UI tests completed successfully"
 
       - name: Set UI Test Results

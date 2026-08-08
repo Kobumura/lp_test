@@ -963,9 +963,40 @@ jobs:
         run: exit 1
 
   # Android UI Tests - SKIPPED IN DEV MODE
+  #
+  # THE UI-TEST TIME BUDGET IS PAYLOAD-TUNABLE (SAV-712). Defaults are unchanged at
+  # 40 (job) / 25 (step), so every target that does not ask for more behaves exactly
+  # as before; only a target dispatching a suite too large for the default raises it.
+  #
+  # WHY IT IS TUNABLE RATHER THAN JUST BIGGER. A timeout is a hang detector, and its
+  # right value is a property of the SUITE being dispatched, not of this runner. This
+  # workflow serves several targets: LittleTalks dispatches ONE flow
+  # (.maestro/signup-flow.yml), SaveYour's per-PR gate dispatches one
+  # (.maestro/smoke/smoke-test.yaml), and SaveYour's nightly dispatches the whole
+  # .maestro tree. Raising a single shared default to fit the largest of those would
+  # make a HUNG single-flow run take 65 minutes to surface instead of 40 — a real
+  # regression in feedback time for targets that have no reason to pay for it.
+  #
+  # THE INVARIANT, and it is the part that is easy to get wrong:
+  #
+  #     job_timeout  >  preamble + step_timeout
+  #
+  # The step budget only means anything if the job envelope outlives it. Measured on
+  # SaveYour nightly run 30986843490 (2026-08-05), the preamble — checkout, npm
+  # install, disk cleanup, SDK/Java setup, gradle cache, and an 11m42s
+  # `assembleDebug` — consumed 16m55s of the job before Maestro was reached. With the
+  # OLD pair that gave 40 - 17 = ~23 minutes of usable step time against a 25-minute
+  # step cap, so THE STEP CAP COULD NEVER FIRE: the job envelope always expired first
+  # and killed the run mid-suite. That is exactly what happened — the step was
+  # cancelled at 23m06s, under its own nominal 25-minute limit, and the whole job was
+  # reported `cancelled` rather than the step reporting a clean timeout.
+  #
+  # So a caller raising the step budget MUST raise the job budget by at least as much
+  # plus the preamble, or it will reproduce that same silent truncation with bigger
+  # numbers. `ui_test_job_timeout_minutes` exists so the pair moves together.
   android-ui-tests:
     runs-on: ${{ needs.setup.outputs.android_runner }}
-    timeout-minutes: 40
+    timeout-minutes: ${{ github.event.client_payload.build_config.ui_test_job_timeout_minutes || 40 }}
     needs: [setup, unit-tests]
     if: needs.setup.outputs.build_android == 'true' && needs.setup.outputs.run_ui_tests == 'true' && needs.setup.outputs.dev_mode == 'false' && (success() || needs.setup.outputs.fail_fast == 'false')
     outputs:
@@ -1162,9 +1193,13 @@ jobs:
           # Path relative to ./private-repo (the emulator step's working-directory).
           echo "DEBUG_APK_PATH=android/$APK" >> "$GITHUB_ENV"
 
+      # Budget for emulator boot + APK install + the Maestro run itself. Default 25
+      # unchanged; see the invariant on the job's `timeout-minutes` above before
+      # raising this — the two must move together or the job cap truncates the suite
+      # while this one looks generous and never fires.
       - name: Run Android Maestro UI Tests
         uses: reactivecircus/android-emulator-runner@v2
-        timeout-minutes: 25
+        timeout-minutes: ${{ github.event.client_payload.build_config.ui_test_timeout_minutes || 25 }}
         with:
           api-level: 33
           target: google_apis

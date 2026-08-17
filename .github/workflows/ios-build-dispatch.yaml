@@ -312,7 +312,7 @@ jobs:
             ./private-repo/metro.log
             ~/.maestro/tests/
             ~/.maestro/screenshots/
-          retention-days: 3
+          retention-days: 30
 
       - name: Check UI Test Failure
         if: ${{ env.UI_TEST_SUCCESS == 'false' && github.event.client_payload.fail_fast != 'false' }}

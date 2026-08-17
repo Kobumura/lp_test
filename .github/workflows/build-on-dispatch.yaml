@@ -956,7 +956,7 @@ jobs:
             ./private-repo/metro.log
             ~/.maestro/tests/
             ~/.maestro/screenshots/
-          retention-days: 3
+          retention-days: 30
 
       - name: Check UI Test Failure
         if: env.UI_TEST_SUCCESS == 'false' && needs.setup.outputs.fail_fast == 'true'
@@ -1271,7 +1271,7 @@ jobs:
             ./private-repo/metro.log
             ~/.maestro/tests/
             ~/.maestro/screenshots/
-          retention-days: 3
+          retention-days: 30
 
       - name: Check UI Test Failure
         if: failure() && needs.setup.outputs.fail_fast == 'true'

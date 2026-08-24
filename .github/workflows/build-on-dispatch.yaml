@@ -2047,6 +2047,7 @@ jobs:
           STATUS_TOKEN: ${{ secrets.STATUS_CALLBACK_TOKEN }}
           TARGET_REPO: ${{ needs.setup.outputs.target_repo }}
           TARGET_SHA: ${{ needs.setup.outputs.target_sha }}
+          SETUP_RESULT: ${{ needs.setup.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
           UI_RESULT: ${{ needs.android-ui-tests.result }}
         run: |
@@ -2055,16 +2056,25 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           # Aggregate the two CI legs. Each is: success | failure | cancelled |
-          # skipped. 'skipped' = that leg wasn't requested (e.g. run_ui_tests
-          # false) — treat as a neutral pass so it can't block the PR. The PR
-          # goes green only if NEITHER leg failed/cancelled.
-          fail=""
-          case "$UNIT_RESULT" in success|skipped) ;; *) fail="unit-tests=$UNIT_RESULT" ;; esac
-          case "$UI_RESULT" in success|skipped) ;; *) fail="${fail:+$fail, }ui-tests=$UI_RESULT" ;; esac
-          if [ -z "$fail" ]; then
-            STATE="success"; DESC="LittlePipes CI passed (unit + UI)"
+          # skipped. On its own 'skipped' is AMBIGUOUS - it means either:
+          #   - the leg was not requested (e.g. run_ui_tests false) -> neutral pass
+          #   - an upstream job failed so the leg never ran     -> NOT a pass
+          # The leg result cannot tell those apart, so gate on setup first: if
+          # setup did not succeed then no leg can have run, and the only honest
+          # status is failure. (SAV-1382: setup emits ci_only before the step
+          # that failed, so this job still ran and posted SUCCESS for a run that
+          # executed zero tests.)
+          if [ "$SETUP_RESULT" != "success" ]; then
+            STATE="failure"; DESC="LittlePipes CI failed: setup=$SETUP_RESULT (test legs never ran)"
           else
-            STATE="failure"; DESC="LittlePipes CI failed: $fail"
+            fail=""
+            case "$UNIT_RESULT" in success|skipped) ;; *) fail="unit-tests=$UNIT_RESULT" ;; esac
+            case "$UI_RESULT" in success|skipped) ;; *) fail="${fail:+$fail, }ui-tests=$UI_RESULT" ;; esac
+            if [ -z "$fail" ]; then
+              STATE="success"; DESC="LittlePipes CI passed (unit + UI)"
+            else
+              STATE="failure"; DESC="LittlePipes CI failed: $fail"
+            fi
           fi
 
           if [ -z "${STATUS_TOKEN:-}" ]; then
@@ -2077,16 +2087,27 @@ jobs:
           fi
 
           echo "Reporting $STATE to $TARGET_REPO@$TARGET_SHA (context: $CONTEXT)"
-          CODE=$(curl -sS -o /tmp/status.out -w "%{http_code}" -X POST \
-            -H "Authorization: token $STATUS_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA" \
-            -d "$(jq -n --arg s "$STATE" --arg c "$CONTEXT" --arg d "$DESC" --arg u "$RUN_URL" \
-                 '{state:$s, context:$c, description:$d, target_url:$u}')")
+          BODY=$(jq -n --arg s "$STATE" --arg c "$CONTEXT" --arg d "$DESC" --arg u "$RUN_URL"                    '{state:$s, context:$c, description:$d, target_url:$u}')
+
+          # An unwritten status is indistinguishable from a still-running one, so
+          # a single transient 5xx must not strand the commit at pending forever
+          # (SAV-1382 mode 2: two 503s sixty minutes apart did exactly that, on
+          # main, where pending blocks nothing and nobody learns the run failed).
+          # Retry 5xx and connection failures; a 4xx is a real rejection.
+          CODE=""
+          for attempt in 1 2 3 4 5; do
+            CODE=$(curl -sS -o /tmp/status.out -w "%{http_code}" -X POST               -H "Authorization: token $STATUS_TOKEN"               -H "Accept: application/vnd.github+json"               "https://api.github.com/repos/$TARGET_REPO/statuses/$TARGET_SHA"               -d "$BODY") || CODE="000"
+            case "$CODE" in
+              201) break ;;
+              5*|000) echo "attempt $attempt: HTTP $CODE writing commit status; retrying"; sleep $((attempt * 10)) ;;
+              *) break ;;
+            esac
+          done
           if [ "$CODE" != "201" ]; then
-            echo "Status callback failed: HTTP $CODE"; cat /tmp/status.out; exit 1
+            echo "::error title=Commit status not written::Could not POST $STATE to $TARGET_REPO@$TARGET_SHA after $attempt attempts (HTTP $CODE). That commit stays at pending, which looks identical to a run still in progress."
+            cat /tmp/status.out; exit 1
           fi
-          echo "Commit status posted."
+          echo "Commit status posted ($STATE)."
 
   # Combined commit and notify job - replaces individual commits and adds Slack back
   commit-and-notify:

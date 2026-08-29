@@ -1197,6 +1197,29 @@ jobs:
       # unchanged; see the invariant on the job's `timeout-minutes` above before
       # raising this — the two must move together or the job cap truncates the suite
       # while this one looks generous and never fires.
+      #
+      # `-camera-back` IS TUNABLE, AND DEFAULTS TO TODAY'S `none` (SAV-712).
+      #
+      # A target whose suite exercises the device camera cannot pass here otherwise.
+      # Measured on SaveYour's nightly run 31933978264 (2026-08-16), whose
+      # `barcode-scanner-ui` flow failed as `Assertion is false: "Scan Barcode" is
+      # visible` — which reads like deleted copy and was not. That run's own
+      # device-logcat says why:
+      #
+      #   E/CameraValidator  Camera LensFacing verification failed, existing cameras: []
+      #   W/CameraX          CameraIdListIncorrectException: Expected camera missing from device.
+      #
+      # react-native-vision-camera then hands the screen a null device and it renders
+      # "Initializing camera..." forever, so the assertion could never pass. The flow
+      # was correct the whole time; the emulator simply had no camera.
+      #
+      # WHY A KNOB RATHER THAN CHANGING THE DEFAULT. Same argument this workflow
+      # already makes for `ui_test_timeout_minutes`: whether a camera is needed is a
+      # property of the SUITE, not of this runner. This workflow serves several
+      # targets, and only SaveYour's nightly runs a camera flow — LittleTalks'
+      # single signup flow and SaveYour's per-PR smoke do not, and should not pay
+      # the boot cost or take on the extra surface. A caller that sends nothing gets
+      # `-camera-back none`, byte-for-byte as before.
       - name: Run Android Maestro UI Tests
         uses: reactivecircus/android-emulator-runner@v2
         timeout-minutes: ${{ github.event.client_payload.build_config.ui_test_timeout_minutes || 25 }}
@@ -1206,7 +1229,7 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back ${{ github.event.client_payload.build_config.emulator_camera_back || 'none' }}
           disable-animations: true
           working-directory: ./private-repo
           script: |

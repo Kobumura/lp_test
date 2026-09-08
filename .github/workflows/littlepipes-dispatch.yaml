@@ -1,19 +1,19 @@
-name: LittlePipes dispatch (v1 entry — strangler)
+name: LittlePipes dispatch (v1 entry)
 
-# The NEW front door for dispatch contract v1 (see .claude/notes/dispatch-contract-v1.md,
-# graduating to public CONTRACT.md). It normalizes ANY accepted payload to the canonical
-# v1 envelope, masks secrets, validates required coordinates, and echoes the result.
+# The v1 dispatch front door (contract: .claude/notes/dispatch-contract-v1.md, graduating
+# to public CONTRACT.md). It normalizes ANY accepted payload to the canonical v1 envelope,
+# masks secrets, validates required coordinates, and ROUTES by intent into a capability
+# workflow.
 #
-# STRANGLER STATUS (LP-51): routing into build/ci/deploy is the NEXT carving step — this
-# door currently stops after normalize+validate. It listens ONLY on the `littlepipes`
-# event, which no tenant sends yet, so it is INERT in production and cannot double-run
-# against the live god-file (build-on-dispatch.yaml). When a capability is carved out of
-# the god-file, its legacy event type moves HERE and is removed THERE in the same commit —
-# no double-run window.
+# STRANGLER STATUS (LP-51): the `intent:ci` path is now wired to the reusable ci-php.yml.
+# This entry still listens ONLY on the `littlepipes` event (no tenant sends it yet), so it
+# runs IN PARALLEL with the live executors and cannot double-run them. Cut a legacy event
+# (php-ci, build-*) over to this entry — and delete its old executor — only in the same
+# commit, after a green-for-green proof. build/deploy intents are not routed yet (still on
+# the god-file); they fall through to the "not yet routed" note.
 #
-# Manual contract test:
-#   Actions ▸ "LittlePipes dispatch (v1 entry — strangler)" ▸ Run workflow ▸ paste a
-#   client_payload JSON (legacy or v1) into raw_payload to see how it normalizes.
+# Manual contract test (normalize-only; does NOT run full CI):
+#   Actions ▸ this workflow ▸ Run workflow ▸ paste a client_payload JSON into raw_payload.
 
 on:
   repository_dispatch:
@@ -34,6 +34,12 @@ concurrency:
 jobs:
   route:
     runs-on: ubuntu-latest
+    outputs:
+      intent: ${{ steps.norm.outputs.intent }}
+      target_repo: ${{ steps.norm.outputs.target_repo }}
+      ref: ${{ steps.norm.outputs.ref }}
+      sha: ${{ steps.norm.outputs.sha }}
+      status_context: ${{ steps.norm.outputs.status_context }}
     steps:
       - name: Checkout LittlePipes (for the normalizer)
         uses: actions/checkout@v5
@@ -65,8 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           # pipefail is load-bearing: without it a jq failure here would exit 0 and
-          # SILENTLY skip masking, leaking secrets into later logs (the exact silent-
-          # failure class we hit twice on status-back/dispatch this session).
+          # SILENTLY skip masking, leaking secrets into later logs.
           # Only mask SCALAR secret values. A nested object/array value would make jq -r
           # emit bare `{`/`}` fragments, each add-mask'd → useless (and would mask stray
           # braces across the whole log). Secrets are always scalars (tokens, b64 blobs).
@@ -75,17 +80,16 @@ jobs:
             [ -n "$v" ] && echo "::add-mask::$v"
           done <<< "$secret_vals"
 
-      - name: Normalize to contract v1
+      - name: Normalize to contract v1 + set routing outputs
+        id: norm
         run: |
           set -euo pipefail
           node scripts/dispatch/normalize.mjs "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/normalized.json"
-
-      - name: Validate required envelope fields
-        run: |
-          set -euo pipefail
           repo=$(jq -r '.target_repo // ""' "$RUNNER_TEMP/normalized.json")
           sha=$(jq -r '.sha // ""' "$RUNNER_TEMP/normalized.json")
+          ref=$(jq -r '.ref // "main"' "$RUNNER_TEMP/normalized.json")
           intent=$(jq -r '.intent // ""' "$RUNNER_TEMP/normalized.json")
+          ctx=$(jq -r '.status_context // "littlepipes/ci"' "$RUNNER_TEMP/normalized.json")
           if [ -z "$repo" ] || [ -z "$sha" ]; then
             echo "::error::normalized payload missing target_repo or sha"; exit 1
           fi
@@ -93,6 +97,13 @@ jobs:
             ci|build|deploy) ;;
             *) echo "::error::unknown intent '$intent'"; exit 1 ;;
           esac
+          {
+            echo "intent=$intent"
+            echo "target_repo=$repo"
+            echo "ref=$ref"
+            echo "sha=$sha"
+            echo "status_context=$ctx"
+          } >> "$GITHUB_OUTPUT"
           echo "Routed: intent=$intent repo=$repo sha=$sha"
 
       - name: Show normalized envelope (secrets redacted)
@@ -103,5 +114,23 @@ jobs:
             echo '```json'
             jq '.secrets |= with_entries(.value = "***")' "$RUNNER_TEMP/normalized.json"
             echo '```'
-            echo '_Strangler stop-point: build/ci/deploy routing is the next carving step (LP-51)._'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Note intents not yet routed by the v1 entry
+        if: steps.norm.outputs.intent != 'ci'
+        run: |
+          echo "::notice::intent '${{ steps.norm.outputs.intent }}' is not routed by the v1 entry yet — still handled by build-on-dispatch.yaml (god-file). Only intent:ci is carved out so far (LP-51)."
+
+  # intent:ci → the reusable PHP CI capability. Guarded to real dispatches: a manual
+  # workflow_dispatch run stops after normalize (no tenant token to clone/report with).
+  ci-php:
+    needs: route
+    if: needs.route.outputs.intent == 'ci' && github.event_name == 'repository_dispatch'
+    uses: ./.github/workflows/ci-php.yml
+    with:
+      target_repo: ${{ needs.route.outputs.target_repo }}
+      sha: ${{ needs.route.outputs.sha }}
+      ref: ${{ needs.route.outputs.ref }}
+      status_context: ${{ needs.route.outputs.status_context }}
+    secrets:
+      TARGET_REPO_TOKEN: ${{ github.event.client_payload.secrets.TARGET_REPO_TOKEN }}

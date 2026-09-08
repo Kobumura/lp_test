@@ -1261,6 +1261,61 @@ jobs:
             maestro test ${{ github.event.client_payload.build_config.app_id && format('-e APP_ID={0} ', github.event.client_payload.build_config.app_id) || '' }}"${{ github.event.client_payload.build_config.ui_test_flow || needs.setup.outputs.ui_test_flow || '.maestro/signup-flow.yml' }}"
             echo "✅ Android UI tests completed successfully"
 
+      # SAV-1633 (SaveYour) — a green Maestro verdict is not self-certifying, and
+      # THIS is the path where that matters. SaveYour's own workflow already
+      # carries this guard, but its trigger has never fired; the per-PR smoke and
+      # the nightly full suite both run here, so every merge decision on that
+      # project has been made on an unchecked verdict.
+      #
+      # The case: on SaveYour's SAV-1061 the emulator's low-memory killer killed
+      # com.SaveYour and the `home-screen` assertion PASSED 5.3 SECONDS LATER
+      # against a decaying accessibility tree whose resource-ids were all
+      # `com.android.systemui:*`. A false RED costs a re-run; a false GREEN ships.
+      #
+      # SELF-SCOPING BY FILE TEST, NOT BY REPO NAME. `scripts/maestro-false-green.js`
+      # exists only in SaveYour's checkout, so a target that does not ship it
+      # (LittleTalks) runs exactly what it runs today. A hardcoded repo name is a
+      # string someone has to maintain; a file test is a fact about the runner.
+      #
+      # NO `--debug-output` IS NEEDED and none is added — the Maestro invocation
+      # above is untouched. Maestro writes ~/.maestro/tests/<timestamp>/<flow>/ by
+      # default, which is the directory the Upload step below already collects.
+      # Measured against real bundles downloaded from this workflow's own runs:
+      # green 34278380685 -> "1 flow(s) verified - the green is trustworthy";
+      # crashed 33961957795 attempt 1 -> SIGSEGV classified, exit 1.
+      #
+      # `always()` so it sees BOTH directions: it turns a false GREEN red, and on
+      # an already-red run it prints the failure classification (APP CRASHED / APP
+      # KILLED BY THE SYSTEM / ENVIRONMENTAL / GENUINE ASSERTION FAILURE) so a
+      # system kill is not misread as whichever element the assertion happened to
+      # name — a misreading that cost four hours on run 33961957795.
+      #
+      # PLACED BEFORE "Set UI Test Results" DELIBERATELY: that step reads
+      # `job.status`, so a refusal here also flips `ui_tests_passed` to false.
+      # Placed after it, the job would fail while still publishing `passed=true`.
+      - name: Verify the Maestro verdict is trustworthy (SAV-1086 / SAV-1469)
+        if: always()
+        working-directory: ./private-repo
+        run: |
+          if [ ! -f scripts/maestro-false-green.js ]; then
+            echo "No maestro-false-green guard in this target repo - skipping."
+            exit 0
+          fi
+          BUNDLE="$HOME/.maestro/tests"
+          if [ -z "$(find "$BUNDLE" -name commands.json -print -quit 2>/dev/null)" ]; then
+            # The guard reports success when it finds nothing to read, so a wrong
+            # or empty path would make this step a gate that cannot fail — the
+            # exact shape it exists to prevent. A green Maestro run always writes
+            # a bundle; if the job is already red, it died before Maestro ran.
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "::error::Maestro reported success but wrote no debug bundle under $BUNDLE - the verdict could not be verified."
+              exit 1
+            fi
+            echo "No Maestro debug bundle under $BUNDLE and the job is already failing - nothing to verify."
+            exit 0
+          fi
+          node scripts/maestro-false-green.js "$BUNDLE"
+
       - name: Set UI Test Results
         id: ui_test_results
         if: always()

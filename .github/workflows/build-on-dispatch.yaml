@@ -1075,6 +1075,13 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        # LP-64: v3 defaults `packages` to "tools platform-tools", and Google removed
+        # the legacy `tools` package on 2026-09-15, so sdkmanager exited 1 here on
+        # every run. Nothing in this job uses legacy `tools`. Pinned explicitly so
+        # the step does not depend on which default a given action version ships
+        # (upstream changed it to "platform-tools" in v4.0.2; issue #537).
+        with:
+          packages: platform-tools
 
       - name: Enable KVM group perms
         run: |

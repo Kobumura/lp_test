@@ -1584,11 +1584,16 @@ jobs:
         working-directory: ./private-repo/ios
         run: |
           echo "🔑 Setting up Match certificates for main app..."
-          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+          # LP-65: import into the keychain "Create Match Keychain & SSH" made,
+          # with its password. Without these, match imports into login.keychain,
+          # cannot set the key's access (no password) and codesign then waits on
+          # an invisible "codesign wants to access key" dialog until the job
+          # times out (seen: SaveYour run 36751768439, stuck 57 min in archive).
+          fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true --keychain_name ios-build.keychain --keychain_password "12345678"
           
           if [ "$IOS_ONESIGNAL_EXTENSION" = "true" ]; then
             echo "🔑 Setting up Match certificates for OneSignal extension..."
-            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true
+            fastlane match appstore --git_url "$MATCH_GIT_URL" --app_identifier "${{ needs.setup.outputs.ios_bundle_id }}.OneSignalNotificationServiceExt" --team_id "${{ needs.setup.outputs.apple_team_id }}" --readonly true --keychain_name ios-build.keychain --keychain_password "12345678"
           else
             echo "ℹ️ No OneSignal extension for this app (app_config.ios_onesignal_extension=false) - skipping its profile"
           fi
@@ -1733,7 +1738,22 @@ jobs:
 
       - name: Build & Archive
         working-directory: ./private-repo
+        # LP-65: a hung archive previously sat until the 6h job limit
+        # (SaveYour run 36751768439: silent for 40 min mid-compile).
+        timeout-minutes: 60
         run: |
+          # LP-65 diagnostic heartbeat: once a minute, free memory plus the
+          # longest-running compiler processes, so a stall can be told apart
+          # (one file stuck vs. memory thrash). Remove once the lane is stable.
+          ( while true; do
+              sleep 60
+              FREE=$(vm_stat | awk '/Pages free/ {gsub("\\.","",$3); printf "%d", $3*16384/1048576}')
+              SWAP=$(sysctl -n vm.swapusage | sed 's/  */ /g')
+              echo "[heartbeat $(date -u +%H:%M:%S)] free=${FREE}MB swap:${SWAP}"
+              ps -Ao etime=,pid=,comm=,args= | grep -E 'clang|swift-frontend|ld ' | grep -v grep | sort -r | head -3 | cut -c1-240 | sed 's/^/[heartbeat]   /'
+            done ) &
+          HEARTBEAT_PID=$!
+          trap 'kill $HEARTBEAT_PID 2>/dev/null || true' EXIT
           xcodebuild clean archive \
             -workspace "$IOS_DIR/${{ needs.setup.outputs.ios_workspace }}" \
             -scheme ${{ needs.setup.outputs.ios_scheme }} \

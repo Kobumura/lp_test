@@ -203,13 +203,20 @@ jobs:
           fi
           
           # Set runner types based on speed preference
+          #
+          # KEEP IN STEP WITH LITTLETALKS: littletalks-mobile does NOT build iOS
+          # through this file. It has its own copy of the iOS pipeline in
+          # littletalks-mobile/.github/workflows/buildTestDeploy-ios.yaml, with its
+          # own runs-on label and its own xcode-select pin. When the iOS runner or
+          # Xcode version changes here, change it there too - Apple's minimum SDK
+          # for App Store uploads applies to both apps (see LP-65 and LTD-319).
           if [ "$SPEED" = "fast" ]; then
-            IOS_RUNNER="macos-14"
+            IOS_RUNNER="macos-26"
             ANDROID_RUNNER="buildjet-4vcpu-ubuntu-2204"
             USE_BUILDJET="true"
             USE_WARPBUILD="true"
           else
-            IOS_RUNNER="macos-14"
+            IOS_RUNNER="macos-26"
             ANDROID_RUNNER="ubuntu-latest"
             USE_BUILDJET="false"
             USE_WARPBUILD="false"
@@ -790,7 +797,9 @@ jobs:
         working-directory: ./private-repo
         run: |
           echo "🚀 Configuring WarpBuild for optimal performance..."
-          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          # LP-65: no Xcode pin. macos-26 defaults to Xcode 26.6, and runner-images
+          # supports only one Xcode major per macOS version, so a hardcoded path
+          # breaks at every bump. Apple requires the iOS 26 SDK for uploads.
           xcodebuild -version
           cd ios
           rm -rf Pods/ Podfile.lock

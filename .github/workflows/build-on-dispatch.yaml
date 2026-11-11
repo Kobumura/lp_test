@@ -515,6 +515,7 @@ jobs:
       latest_build_number: ${{ steps.query.outputs.build_number }}
       query_success: ${{ steps.query.outputs.success }}
       version_source: ${{ steps.query.outputs.version_source }}
+      query_error: ${{ steps.query.outputs.query_error }}
     steps:
       # CRITICAL: must be the first step in every job that may receive
       # client_payload secrets. repository_dispatch payload values aren't
@@ -554,12 +555,12 @@ jobs:
             exit 1
           fi
 
-      - name: Install Codemagic CLI Tools
+      # LP-70: the Codemagic `google-play tracks get` CLI stopped returning track
+      # data when ubuntu-latest moved to 26.04, and its errors were discarded. Read
+      # the tracks with google-api-python-client, the client play_upload.py uses.
+      - name: Install Google Play API client
         run: |
-          echo "📦 Installing Codemagic CLI tools..."
-          pip install --default-timeout=100 codemagic-cli-tools
-          echo "✅ Codemagic CLI tools installed"
-          google-play --version
+          python3 -m pip install --quiet --default-timeout=100 google-api-python-client==2.201.0 google-auth==2.62.1
 
       - name: Query Google Play Console for Full Version Info
         id: query
@@ -573,134 +574,191 @@ jobs:
           import json
           import re
 
+          # LP-70: reads the track text printed by play_tracks.py.
+          #
+          # Build ceiling: the highest versionCode in ANY release on ANY track (draft,
+          # halted, completed...). Play enforces codes across the whole app, so the next
+          # build must clear all of them. It is reported whenever any release exists,
+          # even if no release name can be read.
+          #
+          # Version name: taken from the release that OWNS the build ceiling - not the
+          # highest x.y.z name anywhere. A stale draft or halted release with a higher
+          # name (e.g. a 1.0.1 fallback upload) must not decide the next version.
+          # Names are rebuilt from integers, so "0.3.08" is read as 0.3.8.
+
+
           def parse_version(version_string):
-              """Parse version string and return major, minor, patch"""
-              match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_string)
-              if match:
-                  return {
-                      'major': int(match.group(1)),
-                      'minor': int(match.group(2)),
-                      'patch': int(match.group(3)),
-                      'full': f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-                  }
-              return None
+              match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_string or '')
+              if not match:
+                  return None
+              major, minor, patch = (int(g) for g in match.groups())
+              return {'major': major, 'minor': minor, 'patch': patch,
+                      'full': f"{major}.{minor}.{patch}"}
 
-          def compare_versions(v1, v2):
-              """Return True if v1 > v2 (semantic version comparison)"""
-              if not v1 or not v2:
-                  return bool(v1)
 
-              if v1['major'] != v2['major']:
-                  return v1['major'] > v2['major']
-              if v1['minor'] != v2['minor']:
-                  return v1['minor'] > v2['minor']
-              return v1['patch'] > v2['patch']
+          def version_key(v):
+              return (v['major'], v['minor'], v['patch'])
 
-          # Read track data from stdin
+
           track_data = sys.stdin.read()
-
-          # A single track can carry MORE THAN ONE active release at once (e.g.
-          # a staged rollout alongside a halted one). The old single re.findall
-          # below used a non-greedy `.*?` that stopped at the FIRST release in
-          # each track and silently ignored the rest -- so a release with a
-          # higher build code but a lower semver name became invisible and the
-          # build ceiling regressed (picked build 2 while build 23 was live,
-          # which Play then rejects as not-upgradeable). We must see every
-          # release in every track. Split the concatenated CLI output into
-          # per-track sections, then walk all releases within each section.
-          track_sections = re.split(r'(?=Track:\s*\w+)', track_data)
-
-          versions = {}
-          highest_version_obj = None
-          highest_version_track = None
-          highest_build_overall = 0
-
-          print("📊 Found versions in tracks:")
-          print("-" * 50)
-
-          for section in track_sections:
+          releases = []  # (track, build, raw_name)
+          for section in re.split(r'(?=Track:\s*\w+)', track_data):
               tm = re.match(r'Track:\s*(\w+)', section.strip())
               if not tm:
                   continue
               track = tm.group(1)
-
-              # finditer (not findall) so EVERY release in this track is seen,
-              # not just the first. A release may also list multiple version
-              # codes (multi-ABI bundles); take the max within the release.
               for rm in re.finditer(
                   r'Name:\s*([^\n]+?)\s*\n.*?Version codes:\s*\n((?:[ \t]*-\s*\d+\s*\n?)+)',
                   section, re.DOTALL
               ):
-                  version_name = rm.group(1).strip()
                   codes = [int(c) for c in re.findall(r'-\s*(\d+)', rm.group(2))]
-                  if not codes:
-                      continue
-                  build_num = max(codes)
+                  if codes:
+                      releases.append((track, max(codes), rm.group(1).strip()))
 
-                  # Build ceiling: the highest version code across ALL releases
-                  # in ALL tracks. Build codes are the upgrade constraint Play
-                  # enforces; this is the number the next build must clear.
-                  if build_num > highest_build_overall:
-                      highest_build_overall = build_num
-
-                  parsed_version = parse_version(version_name)
-                  if parsed_version:
-                      # Log every release so regressions are visible at a glance.
-                      versions.setdefault(track, []).append({
-                          'version': parsed_version['full'],
-                          'build': build_num,
-                          'raw_name': version_name
-                      })
-                      print(f"{track:12} : {parsed_version['full']:10} (build {build_num})")
-
-                      # Highest semantic VERSION name (separate from build code).
-                      if compare_versions(parsed_version, highest_version_obj):
-                          highest_version_obj = parsed_version
-                          highest_version_track = track
-                  else:
-                      print(f"{track:12} : {version_name:10} (build {build_num}) [unparseable name]")
-
+          print("📊 Releases found:")
+          print("-" * 50)
+          versions = {}
+          for track, build, raw in releases:
+              parsed = parse_version(raw)
+              shown = parsed['full'] if parsed else f"{raw} [unparseable name]"
+              print(f"{track:12} : {shown:10} (build {build})")
+              versions.setdefault(track, []).append(
+                  {'version': parsed['full'] if parsed else None, 'build': build, 'raw_name': raw})
           print("-" * 50)
 
-          # Output results
-          if highest_version_obj:
-              print(f"\n✅ Highest VERSION: {highest_version_obj['full']} from {highest_version_track}")
-              print(f"📦 Highest BUILD code across all releases/tracks: {highest_build_overall}")
-
-              # Next build must clear the highest existing build code across
-              # every release in every track, regardless of which release owns
-              # the highest semver name. (A Play upload-collision bump+retry
-              # downstream handles the rare race where another upload lands in
-              # between.)
-              safe_build = highest_build_overall + 1
-
-              print(f"HIGHEST_VERSION={highest_version_obj['full']}")
-              print(f"HIGHEST_BUILD={safe_build}")
-              print(f"VERSION_SOURCE={highest_version_track}")
-              print(f"ALL_VERSIONS={json.dumps(versions)}")
-          else:
+          if not releases:
               print("HIGHEST_VERSION=0.0.0")
               print("HIGHEST_BUILD=0")
               print("VERSION_SOURCE=none")
               print("ALL_VERSIONS={}")
+              sys.exit(0)
+
+          ceiling = max(build for _, build, _ in releases)
+          owners = [(t, parse_version(raw)) for t, build, raw in releases if build == ceiling]
+          readable = [(t, v) for t, v in owners if v]
+
+          print(f"\n📦 Highest BUILD code across all releases/tracks: {ceiling}")
+          if readable:
+              # The same build can sit on several tracks; if their names differ, take the highest.
+              track, best = max(readable, key=lambda tv: version_key(tv[1]))
+              print(f"✅ Version of that build: {best['full']} (from {track})")
+              print(f"HIGHEST_VERSION={best['full']}")
+              print(f"VERSION_SOURCE={track}")
+          else:
+              # The newest build's name is unreadable (renamed by hand, or a non-x.y.z
+              # custom version). Prefer the highest readable name on any release over the
+              # build.gradle value, which may be a placeholder like "1.0" (LP-70 review N1).
+              any_readable = [(t, parse_version(raw)) for t, _, raw in releases if parse_version(raw)]
+              if any_readable:
+                  track, best = max(any_readable, key=lambda tv: version_key(tv[1]))
+                  print(f"⚠️ Build {ceiling} has no x.y.z release name - using the highest readable name: {best['full']} (from {track})")
+                  print(f"HIGHEST_VERSION={best['full']}")
+                  print(f"VERSION_SOURCE={track}")
+              else:
+                  print(f"⚠️ No release has an x.y.z name - version name will fall back to the file")
+                  print("HIGHEST_VERSION=0.0.0")
+                  print(f"VERSION_SOURCE={owners[0][0]}")
+          print(f"HIGHEST_BUILD={ceiling + 1}")
+          print(f"ALL_VERSIONS={json.dumps(versions)}")
           EOF
 
-          # Query all tracks and capture output
-          TRACK_OUTPUT=""
-          for TRACK in "internal" "alpha" "beta" "production"; do
-            echo "🔍 Checking track: $TRACK"
+          # Query every track with the Google Play API (LP-70). A failure prints the
+          # real error and sets query_error=true; android-build then refuses to fall
+          # back to build.gradle values unless the caller passed a custom version.
+          cat > play_tracks.py << 'EOF'
+          #!/usr/bin/env python3
+          """Read every Google Play track for a package and print it in the text shape
+          parse_versions.py already understands (the shape Codemagic's
+          `google-play tracks get` used to print):
 
-            if OUTPUT=$(google-play tracks get \
-                --package-name "${{ needs.setup.outputs.android_package_name }}" \
-                --track "$TRACK" \
-                --credentials "@file:/tmp/google-play-key.json" 2>&1); then
-              TRACK_OUTPUT="${TRACK_OUTPUT}${OUTPUT}\n"
-              echo "✅ Got track data"
-            fi
-          done
+              Track: internal
+                Name: 0.3.272
+                Status: completed
+                Version codes:
+                  - 223
+
+          Uses google-api-python-client, the same client scripts/play_upload.py uses.
+          Replaces the Codemagic CLI, which stopped returning track data on the
+          ubuntu-26.04 runner image and whose errors were discarded (LP-70).
+
+          Exit 0 with the tracks on stdout. Exit 1 with the error on stderr if the
+          API cannot be read - the caller must treat that as a failed query, never as
+          "the app has no releases".
+          """
+          import argparse
+          import sys
+          import traceback
+
+
+          def format_tracks(tracks):
+              lines = []
+              for track in tracks or []:
+                  lines.append(f"Track: {track.get('track', 'unknown')}")
+                  for release in track.get("releases") or []:
+                      codes = release.get("versionCodes") or []
+                      if not codes:
+                          continue
+                      lines.append(f"  Name: {release.get('name') or '(unnamed)'}")
+                      lines.append(f"  Status: {release.get('status', '')}")
+                      lines.append("  Version codes:")
+                      for code in codes:
+                          lines.append(f"    - {int(code)}")
+              return "\n".join(lines) + "\n"
+
+
+          def fetch_tracks(package, service_account_file):
+              from google.oauth2 import service_account
+              from googleapiclient.discovery import build
+
+              creds = service_account.Credentials.from_service_account_file(
+                  service_account_file,
+                  scopes=["https://www.googleapis.com/auth/androidpublisher"],
+              )
+              svc = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
+              edit_id = svc.edits().insert(packageName=package, body={}).execute(num_retries=3)["id"]
+              try:
+                  resp = svc.edits().tracks().list(packageName=package, editId=edit_id).execute(num_retries=3)
+                  return resp.get("tracks") or []
+              finally:
+                  try:
+                      svc.edits().delete(packageName=package, editId=edit_id).execute()
+                  except Exception:  # read-only edit; Play expires it on its own
+                      pass
+
+
+          def main():
+              p = argparse.ArgumentParser()
+              p.add_argument("--package", required=True)
+              p.add_argument("--service-account", required=True)
+              args = p.parse_args()
+              try:
+                  tracks = fetch_tracks(args.package, args.service_account)
+              except Exception:
+                  print("Google Play track query FAILED:", file=sys.stderr)
+                  traceback.print_exc(file=sys.stderr)
+                  return 1
+              print(f"Read {len(tracks)} track(s) from Google Play", file=sys.stderr)
+              sys.stdout.write(format_tracks(tracks))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          EOF
+
+          QUERY_ERROR="false"
+          if ! TRACK_OUTPUT=$(python3 play_tracks.py \
+              --package "${{ needs.setup.outputs.android_package_name }}" \
+              --service-account /tmp/google-play-key.json); then
+            QUERY_ERROR="true"
+            TRACK_OUTPUT=""
+            echo "::warning::Google Play track query failed - see the error above (LP-70)"
+          fi
 
           # Parse the track data with version-first logic
-          echo -e "$TRACK_OUTPUT" | python3 parse_versions.py > version_results.txt
+          # printf, not echo -e: the lookup prints real newlines and -e would
+          # interpret backslashes inside release names (LP-70).
+          printf '%s\n' "$TRACK_OUTPUT" | python3 parse_versions.py > version_results.txt
 
           # Read the results
           HIGHEST_VERSION="0.0.0"
@@ -738,6 +796,19 @@ jobs:
           echo "build_number=$HIGHEST_BUILD" >> $GITHUB_OUTPUT
           echo "version_source=$VERSION_SOURCE" >> $GITHUB_OUTPUT
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+
+          # The lookup returned releases but the parser produced no build ceiling:
+          # the parser broke. That would fall back to build.gradle's versionCode,
+          # so treat it as a failed query and let android-build stop (LP-70).
+          if [ "$QUERY_ERROR" = "false" ] && [ "$HIGHEST_BUILD" = "0" ] \
+              && printf '%s' "$TRACK_OUTPUT" | grep -q 'Version codes:'; then
+            QUERY_ERROR="true"
+            echo "::warning::Play returned releases but no build ceiling could be read - treating the query as failed (LP-70)"
+          fi
+          if [ "$QUERY_ERROR" = "false" ] && [ "$SUCCESS" != "true" ] && [ "$HIGHEST_BUILD" != "0" ]; then
+            echo "::warning::Build ceiling read ($HIGHEST_BUILD) but the newest release has no x.y.z name - version name will fall back to the file (LP-70)"
+          fi
+          echo "query_error=$QUERY_ERROR" >> $GITHUB_OUTPUT
 
   # iOS UI Tests - SKIPPED IN DEV MODE
   ios-ui-tests:
@@ -1948,7 +2019,23 @@ jobs:
           echo "  Version Source: $VERSION_SOURCE track"
           echo "  Query Success: $STORE_SUCCESS"
           echo "  Version Strategy: $VERSION_STRATEGY"
-          
+
+          # LP-70: if the Play API could not be read, the file values (e.g. 1.0.1 /
+          # versionCode 3) are NOT a safe fallback - they upload a draft below the
+          # track's real version. Stop unless the caller supplied both numbers.
+          # Proceed on store values only if the query job SUCCEEDED and explicitly
+          # reported query_error=false. A job that died before writing its outputs
+          # (pip, credentials, timeout) leaves them empty - that is a failure too.
+          STORE_QUERY_ERROR="${{ needs.google-play-query.outputs.query_error }}"
+          STORE_QUERY_RESULT="${{ needs.google-play-query.result }}"
+          if [ "$STORE_QUERY_ERROR" != "false" ] || [ "$STORE_QUERY_RESULT" != "success" ]; then
+            if [ -z "$CUSTOM_BUILD_NUMBER" ] || [ "$VERSION_STRATEGY" != "custom" ] || [ -z "$CUSTOM_VERSION" ]; then
+              echo "::error::Google Play track query failed or did not complete (job result: $STORE_QUERY_RESULT, query_error: ${STORE_QUERY_ERROR:-unset}), so the next version cannot be determined. Fix the query, or re-dispatch with version_strategy=custom, custom_version and custom_build_number."
+              exit 1
+            fi
+            echo "  ⚠️ Store query unavailable ($STORE_QUERY_RESULT) - using caller-supplied custom version and build number"
+          fi
+
           # Use store version as base if successful, otherwise fall back to file
           if [ "$STORE_SUCCESS" = "true" ] && [ -n "$STORE_VERSION" ] && [ "$STORE_VERSION" != "0.0.0" ]; then
             CURRENT_VERSION="$STORE_VERSION"
@@ -1960,9 +2047,10 @@ jobs:
           
           # Parse current version components
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-          MAJOR=${VERSION_PARTS[0]:-0}
-          MINOR=${VERSION_PARTS[1]:-0}
-          PATCH=${VERSION_PARTS[2]:-0}
+          # Digits only, read as base 10: "08" must not be parsed as octal (LP-70).
+          MAJOR=${VERSION_PARTS[0]//[!0-9]/}; MAJOR=$((10#${MAJOR:-0}))
+          MINOR=${VERSION_PARTS[1]//[!0-9]/}; MINOR=$((10#${MINOR:-0}))
+          PATCH=${VERSION_PARTS[2]//[!0-9]/}; PATCH=$((10#${PATCH:-0}))
           
           # Determine version name based on strategy
           case "$VERSION_STRATEGY" in
@@ -1980,6 +2068,10 @@ jobs:
               ;;
             "custom")
               if [ -n "$CUSTOM_VERSION" ]; then
+                if ! [[ "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                  echo "::error::custom_version must be x.y.z (got: $CUSTOM_VERSION) (LP-70)"
+                  exit 1
+                fi
                 NEXT_VERSION_NAME="$CUSTOM_VERSION"
                 echo "  Custom version: $NEXT_VERSION_NAME"
               else
@@ -1997,13 +2089,18 @@ jobs:
               ;;
           esac
           
+          if [ -z "$NEXT_VERSION_NAME" ]; then
+            echo "::error::Next version name is empty - refusing to build (LP-70)"
+            exit 1
+          fi
+
           # Determine build number
           if [ -n "$CUSTOM_BUILD_NUMBER" ]; then
             NEXT_BUILD="$CUSTOM_BUILD_NUMBER"
             echo "  Custom build number: $NEXT_BUILD"
           else
             # Use store build number if available
-            if [ "$STORE_SUCCESS" = "true" ] && [ "$STORE_BUILD" != "0" ]; then
+            if [ "$STORE_QUERY_ERROR" = "false" ] && [ -n "$STORE_BUILD" ] && [ "$STORE_BUILD" != "0" ]; then
               NEXT_BUILD="$STORE_BUILD"  # Already has safety buffer
               echo "  Build number: $NEXT_BUILD (from store with safety buffer)"
             else
@@ -2042,6 +2139,15 @@ jobs:
           echo "✅ Updated build.gradle:"
           echo "$(grep versionName build.gradle)"
           echo "$(grep -E '^[[:space:]]*versionCode' build.gradle)"
+
+          # LP-70: name the Play release after the versionName only if the stamp
+          # above actually landed; otherwise send no name and Play derives it.
+          if grep -qF "versionName \"$NEXT_VERSION_NAME\"" build.gradle; then
+            echo "RELEASE_NAME_VERIFIED=$NEXT_VERSION_NAME" >> $GITHUB_ENV
+          else
+            echo "::warning::versionName \"$NEXT_VERSION_NAME\" not found in build.gradle after stamping - Play release name left to Play (LP-70)"
+            echo "RELEASE_NAME_VERIFIED=" >> $GITHUB_ENV
+          fi
 
       # Android signing supports two styles, detected in setup:
       #   gradle_p           — build.gradle reads signing* via project.hasProperty().
@@ -2179,6 +2285,7 @@ jobs:
           TRACK: ${{ needs.setup.outputs.track }}
           STATUS: ${{ needs.setup.outputs.track == 'production' && 'completed' || 'draft' }}
           INITIAL_VERSION_CODE: ${{ env.NEXT_VERSION_CODE }}
+          RELEASE_NAME: ${{ env.RELEASE_NAME_VERIFIED }}
           MAX_ATTEMPTS: '10'
         run: |
           chmod +x scripts/upload-android-with-retry.sh

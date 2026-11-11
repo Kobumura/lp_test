@@ -16,6 +16,7 @@
 #   ANDROID_RELEASE_KEY_PASSWORD
 # Optional:
 #   MAX_ATTEMPTS                          default 10
+#   RELEASE_NAME                          Play release name (the versionName); empty = Play default
 set -euo pipefail
 
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-10}"
@@ -61,7 +62,8 @@ while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
     --aab "$AAB_PATH" \
     --service-account "$SA_JSON" \
     --track "$TRACK" \
-    --status "$STATUS"
+    --status "$STATUS" \
+    --release-name "${RELEASE_NAME:-}"
   RC=$?
   set -e
 

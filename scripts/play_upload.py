@@ -51,6 +51,9 @@ def main() -> int:
         default="draft",
         choices=["draft", "completed", "inProgress", "halted"],
     )
+    # LP-70: name the release explicitly. Without a name, Play keeps the name of
+    # the draft being replaced, so a stale "1.0.1" survived onto build 223.
+    p.add_argument("--release-name", default="")
     args = p.parse_args()
 
     creds = service_account.Credentials.from_service_account_file(
@@ -114,15 +117,14 @@ def main() -> int:
         version_code = bundle["versionCode"]
         print(f"Uploaded versionCode {version_code}", file=sys.stderr)
 
+        release = {"versionCodes": [str(version_code)], "status": args.status}
+        if args.release_name:
+            release["name"] = args.release_name[:50]  # Play's release-name limit
         svc.edits().tracks().update(
             packageName=args.package,
             editId=edit_id,
             track=args.track,
-            body={
-                "releases": [
-                    {"versionCodes": [str(version_code)], "status": args.status}
-                ]
-            },
+            body={"releases": [release]},
         ).execute(num_retries=NUM_RETRIES)
         print(f"Assigned to track {args.track} as {args.status}", file=sys.stderr)
 
